@@ -21,7 +21,27 @@ final class Recorder {
     private var voicedInSegment = false
     private let silenceCutAfter: TimeInterval = 2.0
     private let minSegmentSeconds = 5.0
-    private let voiceRMSThreshold: Float = 0.015
+    /// Voice detection is relative to a tracked noise floor so quiet,
+    /// un-boosted inputs (audio interfaces at conservative gain) still
+    /// segment; anything above the absolute ceiling always counts.
+    private let voiceRMSCeiling: Float = 0.015
+    private let voiceRMSFloor: Float = 0.003
+    private var noiseFloor: Float = 0.001
+
+    /// Perceptual level for the HUD: −58 dBFS → 0, −13 dBFS → 1. A linear
+    /// scale looked dead on interfaces that sit 30–40 dB below a built-in
+    /// mic's auto-gained signal even though the recording was fine.
+    static func displayLevel(rms: Float) -> Float {
+        let db = 20 * log10(max(rms, 1e-6))
+        return min(1, max(0, (db + 58) / 45))
+    }
+
+    /// Adaptive VAD: true when `rms` is clearly above the running noise floor.
+    func isVoiced(_ rms: Float) -> Bool {
+        // Floor tracks downward fast and drifts upward slowly.
+        if rms < noiseFloor { noiseFloor = rms } else { noiseFloor = min(rms, noiseFloor * 1.02) }
+        return rms > voiceRMSCeiling || (rms > voiceRMSFloor && rms > noiseFloor * 3)
+    }
 
     private let engine = AVAudioEngine()
     private var converter: AVAudioConverter?
@@ -82,6 +102,7 @@ final class Recorder {
         segmentIndex = 0
         voicedInSegment = false
         lastVoicedAt = ProcessInfo.processInfo.systemUptime
+        noiseFloor = 0.001
 
         input.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
             self?.queue.async { self?.process(buffer: buffer, converter: converter, writer: writer) }
@@ -173,15 +194,14 @@ final class Recorder {
         // a mic on input 2 still meters. Also drives silence-gap chunking.
         let rms = Self.sourceRMS(buffer)
         if buffer.frameLength > 0 {
-            // Perceptual-ish scaling; smooth decay so the waveform breathes.
-            let scaled = min(1, rms * 18)
-            level = max(scaled, level * 0.7)
+            // Smooth decay so the waveform breathes.
+            level = max(Self.displayLevel(rms: rms), level * 0.7)
         }
 
         // Silence-gap segmentation for streamed transcription.
         if chunking {
             let now = ProcessInfo.processInfo.systemUptime
-            if rms > voiceRMSThreshold {
+            if isVoiced(rms) {
                 lastVoicedAt = now
                 voicedInSegment = true
             } else if voicedInSegment, now - lastVoicedAt >= silenceCutAfter {

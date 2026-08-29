@@ -30,7 +30,27 @@ namespace VoiceVector.Win.Services
         private bool _voicedInSegment;
         private const double SilenceCutAfter = 2.0;
         private const double MinSegmentSeconds = 5.0;
-        private const float VoiceRmsThreshold = 0.015f;
+        // Voice detection is relative to a tracked noise floor so quiet,
+        // un-boosted inputs (audio interfaces at conservative gain) still
+        // segment; anything above the absolute ceiling always counts.
+        private const float VoiceRmsCeiling = 0.015f;
+        private const float VoiceRmsFloor = 0.003f;
+        private float _noiseFloor = 0.001f;
+
+        /// <summary>Perceptual level for the HUD: −58 dBFS → 0, −13 dBFS → 1
+        /// (mirrors the macOS meter).</summary>
+        public static float DisplayLevel(float rms)
+        {
+            var db = 20 * Math.Log10(Math.Max(rms, 1e-6));
+            return (float)Math.Min(1, Math.Max(0, (db + 58) / 45));
+        }
+
+        private bool IsVoiced(float rms)
+        {
+            if (rms < _noiseFloor) _noiseFloor = rms;
+            else _noiseFloor = Math.Min(rms, _noiseFloor * 1.02f);
+            return rms > VoiceRmsCeiling || (rms > VoiceRmsFloor && rms > _noiseFloor * 3);
+        }
 
         private WavWriter _writer;
         private DateTime _startedAt;
@@ -69,6 +89,7 @@ namespace VoiceVector.Win.Services
             _writer = null;
             _thread = null;
             Level = 0;
+            _noiseFloor = 0.001f;
             _startedAt = default(DateTime);
             return writer.FinalizeFile();
         }
@@ -216,7 +237,7 @@ namespace VoiceVector.Win.Services
             float rms = 0;
             for (int i = 0; i < frames; i++) rms += mono[i] * mono[i];
             rms = (float)Math.Sqrt(rms / frames);
-            Level = Math.Max(Math.Min(1, rms * 18), Level * 0.7f);
+            Level = Math.Max(DisplayLevel(rms), Level * 0.7f);
 
             // Linear resample source-rate → 16 kHz.
             int outCount = 0;
@@ -244,7 +265,7 @@ namespace VoiceVector.Win.Services
             if (Chunking)
             {
                 double now = Now;
-                if (rms > VoiceRmsThreshold)
+                if (IsVoiced(rms))
                 {
                     _lastVoicedAt = now;
                     _voicedInSegment = true;
