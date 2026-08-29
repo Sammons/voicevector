@@ -44,6 +44,16 @@ final class DictationController: ObservableObject {
 
     var currentLibrary: Library { library }
 
+    /// Pushes the mic warm policy from config into the recorder. Only opens
+    /// the input when the microphone permission is already granted, so it
+    /// never triggers the system prompt on its own.
+    func applyWarmPolicy() {
+        let config = configStore.config
+        recorder.warmAfterRecording = config.keepMicWarmAfterRecording
+        recorder.alwaysWarm = config.keepMicAlwaysWarm && Recorder.permissionGranted
+        recorder.applyWarmPolicy()
+    }
+
     func reloadLibraryRoot() {
         library = Library(root: configStore.config.expandedLibraryURL)
         libraryGeneration += 1

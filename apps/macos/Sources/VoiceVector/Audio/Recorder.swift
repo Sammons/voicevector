@@ -27,26 +27,17 @@ final class Recorder {
     private let voiceRMSCeiling: Float = 0.015
     private let voiceRMSFloor: Float = 0.001
     private var noiseFloor: Float = 0.001
-    /// Slowly-decaying recent peak the HUD meter auto-ranges against.
-    private var peakRMS: Float = 0.002
-
-    /// Auto-ranging perceptual level for the HUD. The meter follows the recent
-    /// peak, so a conservatively-gained audio interface (speech peaking near
-    /// −40 dBFS — still transcribes perfectly) animates as fully as a hot
-    /// built-in mic: full scale at the recent peak, zero 30 dB below it, and
-    /// pinned to zero near the tracked noise floor.
-    static func displayLevel(rms: Float, peak: Float) -> Float {
-        let db = 20 * log10(max(rms, 1e-6) / max(peak, 1e-6))
-        return min(1, max(0, (db + 30) / 30))
+    /// HUD level on a fixed, quantized scale — deliberately simple: −60 dBFS
+    /// is silence, −15 dBFS is full, crushed to 5 steps. A conservatively
+    /// gained interface shows a bar or two, a hot built-in mic four or five,
+    /// and room noise on either reads as flat.
+    static func displayLevel(rms: Float) -> Float {
+        let db = 20 * log10(max(rms, 1e-6))
+        let normalized = min(1, max(0, (db + 60) / 45))
+        return (normalized * 5).rounded(.up) / 5
     }
 
-    /// The HUD shows exactly what the silence-gap detector hears: bars move
-    /// only for buffers the VAD calls voiced, so a quiet room reads as flat.
-    private func meter(_ rms: Float, voiced: Bool) -> Float {
-        guard voiced else { return 0 }
-        if rms > peakRMS { peakRMS = rms } else { peakRMS = max(0.002, peakRMS * 0.995) }
-        return Self.displayLevel(rms: rms, peak: peakRMS)
-    }
+    private func meter(_ rms: Float) -> Float { Self.displayLevel(rms: rms) }
 
     /// Adaptive VAD: true when `rms` is clearly above the running noise floor.
     func isVoiced(_ rms: Float) -> Bool {
@@ -56,6 +47,30 @@ final class Recorder {
     }
 
     private let engine = AVAudioEngine()
+    /// Warm policy (see AppConfig.keepMicWarm*): external interfaces take
+    /// ~0.5 s to open, so the engine can stay running between recordings.
+    var warmAfterRecording = true
+    var alwaysWarm = false
+    private let warmIdleSeconds: TimeInterval = 15
+    private var idleStop: DispatchWorkItem?
+
+    /// Applies the warm policy while idle: opens the input for always-warm,
+    /// or releases it when warming was turned off.
+    func applyWarmPolicy() {
+        queue.async { [self] in
+            guard writer == nil else { return }
+            if alwaysWarm {
+                idleStop?.cancel(); idleStop = nil
+                if !engine.isRunning {
+                    engine.prepare()
+                    do { try engine.start() } catch { Log.error("Mic warm-up failed: \(error.localizedDescription)") }
+                }
+            } else if !warmAfterRecording, engine.isRunning {
+                idleStop?.cancel(); idleStop = nil
+                engine.stop()
+            }
+        }
+    }
     private var converter: AVAudioConverter?
     private var writer: WavWriter?
     private var startedAt: Date?
@@ -115,14 +130,17 @@ final class Recorder {
         voicedInSegment = false
         lastVoicedAt = ProcessInfo.processInfo.systemUptime
         noiseFloor = 0.001
-        peakRMS = 0.002
 
         input.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
             self?.queue.async { self?.process(buffer: buffer, converter: converter, writer: writer) }
         }
 
-        engine.prepare()
-        try engine.start()
+        idleStop?.cancel()
+        idleStop = nil
+        if !engine.isRunning {
+            engine.prepare()
+            try engine.start()
+        }
     }
 
     /// Stops capture, closes the file. Returns duration in seconds.
@@ -132,14 +150,26 @@ final class Recorder {
         queue.sync { [self] in
             guard let writer else { return }
             engine.inputNode.removeTap(onBus: 0)
-            engine.stop()
             self.writer = nil
             converter = nil
             level = 0
             duration = writer.finalize()
             startedAt = nil
-            // Keep render resources allocated so the next start is quicker.
-            engine.prepare()
+            idleStop?.cancel()
+            idleStop = nil
+            if alwaysWarm {
+                // Device stays open.
+            } else if warmAfterRecording {
+                // Leave the device open briefly; release it once clearly idle.
+                let work = DispatchWorkItem { [weak self] in
+                    guard let self, self.writer == nil, !self.alwaysWarm else { return }
+                    self.engine.stop()
+                }
+                idleStop = work
+                queue.asyncAfter(deadline: .now() + warmIdleSeconds, execute: work)
+            } else {
+                engine.stop()
+            }
         }
         return duration
     }
@@ -209,7 +239,7 @@ final class Recorder {
         let voiced = isVoiced(rms)
         if buffer.frameLength > 0 {
             // Smooth decay so the waveform breathes.
-            level = max(meter(rms, voiced: voiced), level * 0.7)
+            level = max(meter(rms), level * 0.7)
         }
 
         // Silence-gap segmentation for streamed transcription.

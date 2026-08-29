@@ -50,6 +50,15 @@ namespace VoiceVector.Win.Services
             StateDetail = "";
         }
 
+        /// <summary>Pushes the mic warm policy from config into the recorder.</summary>
+        public void ApplyWarmPolicy()
+        {
+            var config = _config();
+            Recorder.WarmAfterRecording = config.KeepMicWarmAfterRecording;
+            Recorder.AlwaysWarm = config.KeepMicAlwaysWarm;
+            Recorder.ApplyWarmPolicy();
+        }
+
         public bool IsRecording { get { return State == StateKind.Recording; } }
         public bool IsBusy
         {

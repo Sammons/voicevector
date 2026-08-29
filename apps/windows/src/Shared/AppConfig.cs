@@ -267,6 +267,11 @@ namespace VoiceVector.Shared
         public string ActiveFolder = "Inbox";
         public Dictionary<string, WebhookConfig> FolderWebhooks = new Dictionary<string, WebhookConfig>();
         public string LibraryPath = "~/Documents/VoiceVector";
+        /// <summary>Keep the input open 15 s after a recording (external
+        /// interfaces take a moment to open; the mic indicator stays on).</summary>
+        public bool KeepMicWarmAfterRecording = true;
+        /// <summary>Keep the input open whenever the app runs.</summary>
+        public bool KeepMicAlwaysWarm = false;
 
         public string ExpandedLibraryPath
         {
@@ -322,6 +327,8 @@ namespace VoiceVector.Shared
                 { "activeFolder", ActiveFolder },
                 { "folderWebhooks", webhooks },
                 { "libraryPath", LibraryPath },
+                { "keepMicWarmAfterRecording", KeepMicWarmAfterRecording },
+                { "keepMicAlwaysWarm", KeepMicAlwaysWarm },
             };
         }
 
@@ -387,6 +394,8 @@ namespace VoiceVector.Shared
                             Enabled = Json.Bool(w, "enabled", false),
                         };
             config.LibraryPath = Json.Str(d, "libraryPath", "~/Documents/VoiceVector");
+            config.KeepMicWarmAfterRecording = Json.Bool(d, "keepMicWarmAfterRecording", true);
+            config.KeepMicAlwaysWarm = Json.Bool(d, "keepMicAlwaysWarm", false);
             return config;
         }
 

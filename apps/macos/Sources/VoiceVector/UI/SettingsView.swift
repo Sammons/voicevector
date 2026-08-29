@@ -655,6 +655,19 @@ struct GeneralSettings: View {
                     Toggle("Paste transcript into the active app", isOn: $app.config.autoPaste)
                     Toggle("Use AppleScript for pasting (if normal paste doesn't work)",
                            isOn: $app.config.appleScriptPaste)
+                }
+                .vvCard()
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Microphone").vvSectionTitle()
+                    Text("Opening an external audio interface can take half a second before recording starts. Keeping the microphone open avoids that, but macOS shows its mic-in-use indicator while it's open.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Toggle("Keep the microphone open for 15 seconds after a recording",
+                           isOn: $app.config.keepMicWarmAfterRecording)
+                    Toggle("Always keep the microphone open while VoiceVector is running",
+                           isOn: $app.config.keepMicAlwaysWarm)
                         .disabled(!app.config.autoPaste)
                 }
                 .toggleStyle(.checkbox)

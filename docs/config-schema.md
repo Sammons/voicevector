@@ -45,7 +45,11 @@ adding fields must never reset a user's config.
   "appleScriptPaste": false,            // macOS only; ignored elsewhere
   "activeFolder": "Inbox",
   "folderWebhooks": { "<folder>": { "url": "", "includeAudio": false, "enabled": false } },
-  "libraryPath": "~/Documents/VoiceVector"
+  "libraryPath": "~/Documents/VoiceVector",
+  "keepMicWarmAfterRecording": true,   // keep the input open 15 s after a take
+  "keepMicAlwaysWarm": false           // keep the input open while the app runs
+  //  Both trade the OS mic-in-use indicator for instant starts on external
+  //  interfaces (which take ~0.5 s to open).
 }
 ```
 

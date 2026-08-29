@@ -42,6 +42,10 @@ final class AppState: ObservableObject {
         if oldValue.libraryPath != config.libraryPath {
             dictation.reloadLibraryRoot()
         }
+        if oldValue.keepMicWarmAfterRecording != config.keepMicWarmAfterRecording
+            || oldValue.keepMicAlwaysWarm != config.keepMicAlwaysWarm {
+            dictation.applyWarmPolicy()
+        }
     }
 
     func refreshPermissions() {
@@ -50,6 +54,7 @@ final class AppState: ObservableObject {
         if accessibilityGranted, !hotkey.isRunning {
             hotkey.start()
         }
+        dictation.applyWarmPolicy()
     }
 
     /// Prompt for Accessibility (opens the system dialog once).

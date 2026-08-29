@@ -36,25 +36,16 @@ namespace VoiceVector.Win.Services
         private const float VoiceRmsCeiling = 0.015f;
         private const float VoiceRmsFloor = 0.001f;
         private float _noiseFloor = 0.001f;
-        private float _peakRms = 0.002f;
-
-        /// <summary>Auto-ranging perceptual level for the HUD (mirrors macOS):
-        /// full scale at the recent peak, zero 30 dB below it, pinned to zero
-        /// near the noise floor — so quiet interfaces animate too.</summary>
-        public static float DisplayLevel(float rms, float peak)
+        /// <summary>HUD level on a fixed, quantized scale (mirrors macOS):
+        /// −60 dBFS is silence, −15 dBFS is full, crushed to 5 steps.</summary>
+        public static float DisplayLevel(float rms)
         {
-            var db = 20 * Math.Log10(Math.Max(rms, 1e-6) / Math.Max(peak, 1e-6));
-            return (float)Math.Min(1, Math.Max(0, (db + 30) / 30));
+            var db = 20 * Math.Log10(Math.Max(rms, 1e-6));
+            var normalized = Math.Min(1, Math.Max(0, (db + 60) / 45));
+            return (float)(Math.Ceiling(normalized * 5) / 5);
         }
 
-        /// <summary>The HUD shows exactly what the silence-gap detector hears:
-        /// bars move only for buffers the VAD calls voiced.</summary>
-        private float Meter(float rms, bool voiced)
-        {
-            if (!voiced) return 0;
-            if (rms > _peakRms) _peakRms = rms; else _peakRms = Math.Max(0.002f, _peakRms * 0.995f);
-            return DisplayLevel(rms, _peakRms);
-        }
+        private float Meter(float rms) { return DisplayLevel(rms); }
 
         private bool IsVoiced(float rms)
         {
@@ -64,46 +55,106 @@ namespace VoiceVector.Win.Services
         }
 
         private WavWriter _writer;
+        private readonly object _writerLock = new object();
         private DateTime _startedAt;
         private Thread _thread;
         private volatile bool _stopping;
         private double _resamplePos;
         private float _lastSample;
 
+        /// <summary>Warm policy (see AppConfig.KeepMicWarm*): the capture
+        /// thread can keep the device open between recordings, discarding
+        /// audio until the next Start.</summary>
+        public bool WarmAfterRecording = true;
+        public bool AlwaysWarm = false;
+        private const int WarmIdleMs = 15000;
+        private System.Threading.Timer _idleStop;
+
         private static double Now { get { return Environment.TickCount / 1000.0; } }
 
         public void Start(string wavPath)
         {
             if (_writer != null) return;
-            _writer = new WavWriter(wavPath);
-            _startedAt = DateTime.UtcNow;
-            _stopping = false;
-            TailStartByte = 0;
-            _segmentIndex = 0;
-            _voicedInSegment = false;
-            _lastVoicedAt = Now;
-            _resamplePos = 0;
-            _lastSample = 0;
+            CancelIdleStop();
+            var writer = new WavWriter(wavPath);
+            lock (_writerLock)
+            {
+                _startedAt = DateTime.UtcNow;
+                TailStartByte = 0;
+                _segmentIndex = 0;
+                _voicedInSegment = false;
+                _lastVoicedAt = Now;
+                _resamplePos = 0;
+                _lastSample = 0;
+                _writer = writer;
+            }
+            EnsureCaptureThread();
+        }
 
+        public double Stop()
+        {
+            WavWriter writer;
+            lock (_writerLock)
+            {
+                writer = _writer;
+                if (writer == null) return 0;
+                _writer = null;
+                Level = 0;
+                _noiseFloor = 0.001f;
+                _startedAt = default(DateTime);
+            }
+            if (AlwaysWarm)
+            {
+                // Device stays open.
+            }
+            else if (WarmAfterRecording)
+            {
+                CancelIdleStop();
+                _idleStop = new System.Threading.Timer(_ =>
+                {
+                    if (_writer == null && !AlwaysWarm) StopCaptureThread();
+                }, null, WarmIdleMs, System.Threading.Timeout.Infinite);
+            }
+            else
+            {
+                StopCaptureThread();
+            }
+            return writer.FinalizeFile();
+        }
+
+        /// <summary>Applies the warm policy while idle.</summary>
+        public void ApplyWarmPolicy()
+        {
+            if (_writer != null) return;
+            if (AlwaysWarm) { CancelIdleStop(); EnsureCaptureThread(); }
+            else if (!WarmAfterRecording) { CancelIdleStop(); StopCaptureThread(); }
+        }
+
+        private void CancelIdleStop()
+        {
+            var timer = _idleStop;
+            _idleStop = null;
+            if (timer != null) timer.Dispose();
+        }
+
+        private void EnsureCaptureThread()
+        {
+            var thread = _thread;
+            if (thread != null && thread.IsAlive && !_stopping) return;
+            if (thread != null && thread.IsAlive) thread.Join(3000);
+            _stopping = false;
             _thread = new Thread(CaptureLoop) { IsBackground = true, Name = "vv-capture" };
             _thread.SetApartmentState(ApartmentState.MTA);
             _thread.Start();
         }
 
-        public double Stop()
+        private void StopCaptureThread()
         {
-            var writer = _writer;
-            if (writer == null) return 0;
-            _stopping = true;
             var thread = _thread;
-            if (thread != null) thread.Join(3000);
-            _writer = null;
+            if (thread == null) return;
+            _stopping = true;
+            if (thread.IsAlive) thread.Join(3000);
             _thread = null;
-            Level = 0;
-            _noiseFloor = 0.001f;
-            _peakRms = 0.002f;
-            _startedAt = default(DateTime);
-            return writer.FinalizeFile();
         }
 
         public void Discard()
@@ -209,8 +260,19 @@ namespace VoiceVector.Win.Services
         private void ProcessPacket(IntPtr data, int frames, int channels, bool isFloat,
                                    int bits, double step, short[] outBuffer, bool silent)
         {
-            var writer = _writer;
-            if (writer == null || frames == 0) return;
+            if (frames == 0) return;
+            lock (_writerLock)
+            {
+                var writer = _writer;
+                if (writer == null) return; // warm idle: discard
+                ProcessPacketLocked(writer, data, frames, channels, isFloat, bits, step, outBuffer, silent);
+            }
+        }
+
+        private void ProcessPacketLocked(WavWriter writer, IntPtr data, int frames, int channels,
+                                         bool isFloat, int bits, double step, short[] outBuffer,
+                                         bool silent)
+        {
 
             // Downmix to mono float.
             var mono = new float[frames];
@@ -250,7 +312,7 @@ namespace VoiceVector.Win.Services
             for (int i = 0; i < frames; i++) rms += mono[i] * mono[i];
             rms = (float)Math.Sqrt(rms / frames);
             bool voiced = IsVoiced(rms);
-            Level = Math.Max(Meter(rms, voiced), Level * 0.7f);
+            Level = Math.Max(Meter(rms), Level * 0.7f);
 
             // Linear resample source-rate → 16 kHz.
             int outCount = 0;

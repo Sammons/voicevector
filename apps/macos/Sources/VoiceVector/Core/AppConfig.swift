@@ -251,6 +251,14 @@ struct AppConfig: Codable, Equatable {
     /// Root of recordings/transcripts; `~` is expanded on use.
     var libraryPath: String = "~/Documents/VoiceVector"
 
+    /// Opening an external audio interface takes ~0.5 s. Keep the input
+    /// open for 15 s after a recording so back-to-back takes start instantly
+    /// (the system's mic-in-use indicator stays on meanwhile).
+    var keepMicWarmAfterRecording: Bool = true
+    /// Keep the input open whenever the app is running — instant start,
+    /// always; the mic-in-use indicator is always on.
+    var keepMicAlwaysWarm: Bool = false
+
     var expandedLibraryURL: URL {
         URL(fileURLWithPath: (libraryPath as NSString).expandingTildeInPath, isDirectory: true)
     }
@@ -294,6 +302,8 @@ struct AppConfig: Codable, Equatable {
         activeFolder = try c.decodeIfPresent(String.self, forKey: .activeFolder) ?? "Inbox"
         folderWebhooks = try c.decodeIfPresent([String: WebhookConfig].self, forKey: .folderWebhooks) ?? [:]
         libraryPath = try c.decodeIfPresent(String.self, forKey: .libraryPath) ?? "~/Documents/VoiceVector"
+        keepMicWarmAfterRecording = try c.decodeIfPresent(Bool.self, forKey: .keepMicWarmAfterRecording) ?? true
+        keepMicAlwaysWarm = try c.decodeIfPresent(Bool.self, forKey: .keepMicAlwaysWarm) ?? false
     }
 }
 

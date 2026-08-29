@@ -673,6 +673,40 @@ namespace VoiceVector.Win
             sounds.Click += (s, e) => { config.PlaySounds = sounds.IsChecked == true; config.Save(); };
             stack.Children.Add(sounds);
 
+            var micHint = Theme.Text(
+                "Opening an external audio interface can take half a second before recording starts. "
+                + "Keeping the microphone open avoids that, but Windows shows its microphone-in-use "
+                + "indicator while it's open.", 11.5, secondary: true);
+            micHint.TextWrapping = TextWrapping.Wrap;
+            micHint.Margin = new Thickness(0, 6, 0, 2);
+            stack.Children.Add(micHint);
+            var warmAfter = new CheckBox
+            {
+                Content = Theme.Text("Keep the microphone open for 15 seconds after a recording"),
+                IsChecked = config.KeepMicWarmAfterRecording,
+                Margin = new Thickness(0, 2, 0, 2),
+            };
+            warmAfter.Click += (s, e) =>
+            {
+                config.KeepMicWarmAfterRecording = warmAfter.IsChecked == true;
+                config.Save();
+                Program.Dictation.ApplyWarmPolicy();
+            };
+            stack.Children.Add(warmAfter);
+            var warmAlways = new CheckBox
+            {
+                Content = Theme.Text("Always keep the microphone open while VoiceVector is running"),
+                IsChecked = config.KeepMicAlwaysWarm,
+                Margin = new Thickness(0, 2, 0, 6),
+            };
+            warmAlways.Click += (s, e) =>
+            {
+                config.KeepMicAlwaysWarm = warmAlways.IsChecked == true;
+                config.Save();
+                Program.Dictation.ApplyWarmPolicy();
+            };
+            stack.Children.Add(warmAlways);
+
             var paste = new CheckBox
             {
                 Content = Theme.Text("Paste transcript into the active app"),

@@ -54,6 +54,8 @@ namespace VoiceVector.Win
                                                         app.Dispatcher);
                     Hook.OnAction += Dictation.Handle;
                     Hook.Start();
+                    if (Environment.GetEnvironmentVariable("VV_FAKE_AUDIO") == null)
+                        Dictation.ApplyWarmPolicy();
                     Diag.Breadcrumb("services up");
 
                     MainWin = new MainWindow();

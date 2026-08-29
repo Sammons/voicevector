@@ -13,8 +13,12 @@ enum AudioProbe {
               + "commonFormat=\(format.commonFormat.rawValue) interleaved=\(format.isInterleaved) "
               + "(1=float32 2=float64 3=int16 4=int32)")
         var buffers = 0
+        var startedAt = Date()
         input.installTap(onBus: 0, bufferSize: 4096, format: format) { buffer, _ in
             buffers += 1
+            if buffers == 1 {
+                print(String(format: "first buffer %.0f ms after start()", Date().timeIntervalSince(startedAt) * 1000))
+            }
             guard buffers % 4 == 0 else { return }
             let frames = Int(buffer.frameLength)
             let channels = Int(format.channelCount)
@@ -37,11 +41,13 @@ enum AudioProbe {
                 perChannel.append(String(format: "%.5f", sqrt(sum / Float(max(frames, 1)))))
             }
             let meter = Recorder.sourceRMS(buffer)
-            print("buffer \(buffers): frames=\(frames) rms/ch=\(perChannel) sourceRMS=\(String(format: "%.5f", meter)) level=\(String(format: "%.2f", Recorder.displayLevel(rms: meter, peak: 0.005)))")
+            print("buffer \(buffers): frames=\(frames) rms/ch=\(perChannel) sourceRMS=\(String(format: "%.5f", meter)) level=\(String(format: "%.2f", Recorder.displayLevel(rms: meter)))")
         }
         do {
             engine.prepare()
+            startedAt = Date()
             try engine.start()
+            print(String(format: "engine.start() returned after %.0f ms", Date().timeIntervalSince(startedAt) * 1000))
         } catch {
             print("engine start failed: \(error)")
             exit(1)
