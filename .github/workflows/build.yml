@@ -1,0 +1,112 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  core-tests:
+    name: Core self-test (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: "10.0.x"
+      - run: dotnet run --project apps/windows/src/VoiceVector.SelfTest
+
+  windows-app:
+    name: Windows app (win-x64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: "10.0.x"
+      - uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3
+      - name: Build (net48 — single exe, runtime ships with Windows)
+        run: >
+          msbuild apps/windows/src/VoiceVector.Win/VoiceVector.Win.csproj
+          /restore /t:Build /p:Configuration=Release
+      - name: Smoke test (launch, verify alive, dump boot/crash logs)
+        shell: pwsh
+        run: |
+          $exe = "apps/windows/src/VoiceVector.Win/bin/Release/net48/VoiceVector.exe"
+          $dir = "$env:APPDATA\VoiceVector"
+          $failed = $false
+
+          function Invoke-Launch([string]$label) {
+            $p = Start-Process -FilePath $exe -PassThru
+            Start-Sleep -Seconds 12
+            $alive = -not $p.HasExited
+            $exit = if ($p.HasExited) { $p.ExitCode } else { "n/a" }
+            Write-Host "RESULT [$label] alive=$alive exit=$exit"
+            foreach ($f in "boot.log","crash.log") {
+              $path = "$env:APPDATA\VoiceVector\$f"
+              if (Test-Path $path) {
+                Get-Content $path | ForEach-Object { Write-Host "LOG [$label] $f | $_" }
+              } else { Write-Host "LOG [$label] $f | (not present)" }
+            }
+            if ($alive) { Stop-Process -Id $p.Id -Force }
+            return $alive
+          }
+
+          $results = @{}
+          foreach ($level in 1,2,3,4,5) {
+            $env:VV_UI_LEVEL = "$level"
+            Remove-Item "$dir\crash.log" -ErrorAction SilentlyContinue
+            $results[$level] = Invoke-Launch "level$level"
+          }
+          Remove-Item Env:VV_UI_LEVEL
+          foreach ($step in 0,1,2,3) {
+            $env:VV_WIZARD_STEP = "$step"
+            Remove-Item "$dir\crash.log" -ErrorAction SilentlyContinue
+            $results["w$step"] = Invoke-Launch "wizard$step"
+          }
+          Remove-Item Env:VV_WIZARD_STEP
+
+          Write-Host "=== Windows Error Reporting / .NET events ==="
+          Get-WinEvent -LogName Application -MaxEvents 80 -ErrorAction SilentlyContinue |
+            Where-Object { $_.Message -match "VoiceVector" } |
+            ForEach-Object { Write-Host "WER --- $($_.TimeCreated) $($_.ProviderName)"; Write-Host $_.Message }
+
+          $summary = ((1..5 | ForEach-Object { "L$($_)=$($results[$_])" }) +
+                      (0..3 | ForEach-Object { "W$($_)=$($results["w$($_)"])" })) -join " "
+          Write-Host "SUMMARY $summary"
+          $required = @($results[5], $results["w0"], $results["w1"], $results["w2"], $results["w3"])
+          if ($required -contains $false) { exit 1 }
+      - name: E2E test (mock provider → hotkey → pipeline → paste)
+        run: dotnet run --project apps/windows/src/VoiceVector.E2E -c Release -- apps/windows/src/VoiceVector.Win/bin/Release/net48/VoiceVector.exe
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: VoiceVector-windows-x64
+          path: |
+            apps/windows/src/VoiceVector.Win/bin/Release/net48/VoiceVector.exe
+            apps/windows/src/VoiceVector.Win/bin/Release/net48/VoiceVector.exe.config
+          if-no-files-found: error
+
+  macos-app:
+    name: macOS app
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build, self-test, package
+        run: |
+          cd apps/macos
+          swift build -c release
+          .build/release/VoiceVector --self-test
+          bash scripts/make_app.sh release
+      - name: Zip app bundle
+        run: cd apps/macos/build && zip -r VoiceVector-macos.zip VoiceVector.app
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: VoiceVector-macos
+          path: apps/macos/build/VoiceVector-macos.zip
+          if-no-files-found: error

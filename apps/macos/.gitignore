@@ -1,0 +1,4 @@
+# .NET / Windows
+apps/windows/**/bin/
+apps/windows/**/obj/
+apps/windows/**/publish/

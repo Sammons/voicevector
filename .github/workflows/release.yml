@@ -1,0 +1,113 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Release Windows (win-x64)
+    runs-on: windows-latest
+    environment: release   # OIDC federation subject for Azure signing
+    permissions:
+      contents: write
+      id-token: write   # OIDC federation for Azure Artifact Signing
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: "10.0.x"
+      - uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3
+      - name: Self-test
+        run: dotnet run --project apps/windows/src/VoiceVector.SelfTest
+      - name: Build (net48 — single exe)
+        shell: pwsh
+        run: >
+          msbuild apps/windows/src/VoiceVector.Win/VoiceVector.Win.csproj
+          /restore /t:Build /p:Configuration=Release
+          /p:InformationalVersion=$($env:GITHUB_REF_NAME.TrimStart('v'))
+      # Authenticode via Azure Artifact Signing — activates when the repo
+      # variables exist (set after the one-time Azure portal setup); until
+      # then these steps skip and the exe ships unsigned as before.
+      - name: Azure login (OIDC)
+        if: ${{ vars.AZURE_SIGNING_CLIENT_ID != '' }}
+        uses: azure/login@7ddb5af1ef8758cf1353cf3b42f940aee27ba21c # v3.0.2
+        with:
+          client-id: ${{ vars.AZURE_SIGNING_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_SIGNING_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SIGNING_SUBSCRIPTION_ID }}
+      - name: Sign VoiceVector.exe (Artifact Signing)
+        if: ${{ vars.AZURE_SIGNING_CLIENT_ID != '' }}
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          files-folder: apps/windows/src/VoiceVector.Win/bin/Release/net48
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+      - name: Zip
+        shell: pwsh
+        run: Compress-Archive -Path apps/windows/src/VoiceVector.Win/bin/Release/net48/VoiceVector.exe, apps/windows/src/VoiceVector.Win/bin/Release/net48/VoiceVector.exe.config -DestinationPath VoiceVector-windows-x64.zip
+      - name: Upload to release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$env:GITHUB_REF_NAME" --title "VoiceVector $env:GITHUB_REF_NAME" --generate-notes 2>$null
+          gh release upload "$env:GITHUB_REF_NAME" VoiceVector-windows-x64.zip --clobber
+
+  macos:
+    name: Release macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Import signing certificate (ephemeral keychain)
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          if [ -z "${MACOS_CERT_P12:-}" ]; then echo "no cert secret; will sign ad-hoc"; exit 0; fi
+          KC="$RUNNER_TEMP/build.keychain-db"
+          KCPASS=$(openssl rand -base64 24)
+          security create-keychain -p "$KCPASS" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KCPASS" "$KC"
+          echo "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KC" -P "$MACOS_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KCPASS" "$KC" >/dev/null
+          security list-keychains -d user -s "$KC" login.keychain
+          rm -f "$RUNNER_TEMP/cert.p12"
+      - name: Build, sign, self-test
+        run: |
+          cd apps/macos
+          swift build -c release
+          .build/release/VoiceVector --self-test
+          export VV_VERSION="${GITHUB_REF_NAME#v}"
+          bash scripts/make_app.sh release
+          codesign -dv build/VoiceVector.app 2>&1 | grep -E "TeamIdentifier|flags" || true
+      - name: Notarize & staple
+        env:
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+        run: |
+          if [ -z "${NOTARY_PASSWORD:-}" ]; then echo "no notary secret; skipping notarization"; exit 0; fi
+          cd apps/macos
+          ditto -c -k --keepParent build/VoiceVector.app build/notarize.zip
+          xcrun notarytool submit build/notarize.zip --apple-id "$NOTARY_APPLE_ID" \
+            --team-id "$NOTARY_TEAM_ID" --password "$NOTARY_PASSWORD" --wait
+          xcrun stapler staple build/VoiceVector.app
+          spctl -a -vv build/VoiceVector.app
+      - name: Package
+        run: cd apps/macos/build && zip -r ../../../VoiceVector-macos.zip VoiceVector.app
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --title "VoiceVector $GITHUB_REF_NAME" --generate-notes 2>/dev/null || true
+          gh release upload "$GITHUB_REF_NAME" VoiceVector-macos.zip --clobber

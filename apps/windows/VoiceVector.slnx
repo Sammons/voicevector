@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/VoiceVector.E2E/VoiceVector.E2E.csproj" />
+    <Project Path="src/VoiceVector.SelfTest/VoiceVector.SelfTest.csproj" />
+    <Project Path="src/VoiceVector.Win/VoiceVector.Win.csproj" />
+  </Folder>
+</Solution>

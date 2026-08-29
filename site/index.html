@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VoiceVector — speak, it types</title>
+<meta name="description" content="Native dictation for macOS and Windows. Hold a key, talk, and clean text lands wherever your cursor is. Local-first, bring your own providers, zero dependencies.">
+<link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="%237359F2"/><g fill="white"><rect x="10" y="24" width="4" height="16" rx="2"/><rect x="18" y="18" width="4" height="28" rx="2"/><rect x="26" y="27" width="4" height="10" rx="2"/><rect x="34" y="27" width="4" height="10" rx="2"/><rect x="42" y="18" width="4" height="28" rx="2"/><rect x="50" y="24" width="4" height="16" rx="2"/></g></svg>'>
+<style>
+  :root {
+    --paper: #FAFAFC;
+    --ink: #1B1830;
+    --fade: #6C6884;
+    --mist: #EFEDF8;
+    --card: #FFFFFF;
+    --line: rgba(27, 24, 48, 0.09);
+    --accent: #7359F2;
+    --accent-deep: #5B3DDB;
+    --ok: #2E9E5B;
+    --display: ui-rounded, "SF Pro Rounded", -apple-system, "Segoe UI Variable Display", system-ui, sans-serif;
+    --body: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #131120;
+      --ink: #ECEAF6;
+      --fade: #9A95B5;
+      --mist: #1C192E;
+      --card: #191631;
+      --line: rgba(236, 234, 246, 0.09);
+      --accent: #8B74FF;
+      --accent-deep: #7359F2;
+      --ok: #4BC17E;
+    }
+  }
+
+  * { box-sizing: border-box; margin: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--body);
+    font-size: 17px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: inherit; }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 0 24px; }
+
+  /* ---- nav ---- */
+  nav {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 22px 0;
+  }
+  .wordmark {
+    display: flex; align-items: center; gap: 10px;
+    font-family: var(--display); font-weight: 700; font-size: 19px;
+    text-decoration: none; letter-spacing: -0.01em;
+  }
+  .wordmark svg { display: block; }
+  nav .gh {
+    font-size: 15px; color: var(--fade); text-decoration: none;
+    padding: 6px 14px; border: 1px solid var(--line); border-radius: 999px;
+    transition: color .15s, border-color .15s;
+  }
+  nav .gh:hover { color: var(--accent); border-color: var(--accent); }
+
+  /* ---- hero ---- */
+  header { padding: 72px 0 84px; text-align: center; }
+
+  .wave {
+    display: flex; gap: 5px; align-items: center; justify-content: center;
+    height: 56px; margin-bottom: 40px;
+  }
+  .wave i {
+    width: 5px; border-radius: 3px;
+    background: var(--accent);
+    height: calc(14px + var(--h) * 34px);
+    animation: breathe 2.6s ease-in-out infinite;
+    animation-delay: var(--d);
+  }
+  @keyframes breathe {
+    0%, 100% { transform: scaleY(1); }
+    50% { transform: scaleY(calc(0.4 + var(--h))); }
+  }
+
+  .dictation {
+    min-height: 6.4em;
+    display: grid; place-items: center;
+  }
+  .dictation > * { grid-area: 1 / 1; }
+  .raw-take {
+    font-family: var(--mono); font-size: clamp(15px, 2.4vw, 19px);
+    color: var(--fade); max-width: 34em;
+    animation: dissolve 1s ease 1.1s forwards;
+  }
+  @keyframes dissolve {
+    to { opacity: 0; filter: blur(6px); visibility: hidden; }
+  }
+  h1 {
+    font-family: var(--display); font-weight: 800;
+    font-size: clamp(44px, 9vw, 76px);
+    letter-spacing: -0.03em; line-height: 1.05;
+    opacity: 0; transform: translateY(6px);
+    animation: settle .5s ease 1.7s forwards;
+  }
+  h1 .accent { color: var(--accent); }
+  @keyframes settle { to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) {
+    .wave i { animation: none; }
+    .raw-take { display: none; }
+    h1 { animation: none; opacity: 1; transform: none; }
+    .sub, .cta-row, .cta-notes { animation: none !important; opacity: 1 !important; }
+  }
+
+  .sub {
+    max-width: 34em; margin: 22px auto 0; color: var(--fade); font-size: 19px;
+    opacity: 0; animation: settle .5s ease 2s forwards;
+  }
+  .cta-row {
+    display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;
+    margin-top: 36px;
+    opacity: 0; animation: settle .5s ease 2.2s forwards;
+  }
+  .btn {
+    font-family: var(--display); font-weight: 600; font-size: 17px;
+    text-decoration: none; border-radius: 14px; padding: 14px 26px;
+    transition: transform .15s, box-shadow .15s;
+  }
+  .btn:hover { transform: translateY(-1px); }
+  .btn:focus-visible, a:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 6px;
+  }
+  .btn-primary {
+    background: linear-gradient(160deg, var(--accent), var(--accent-deep));
+    color: #fff;
+    box-shadow: 0 6px 20px rgba(115, 89, 242, 0.35);
+  }
+  .btn-primary:hover { box-shadow: 0 10px 26px rgba(115, 89, 242, 0.45); }
+  .btn-quiet { border: 1.5px solid var(--line); color: var(--ink); }
+  .btn-quiet:hover { border-color: var(--accent); color: var(--accent); }
+  .cta-notes {
+    margin-top: 16px; font-size: 13.5px; color: var(--fade);
+    opacity: 0; animation: settle .5s ease 2.35s forwards;
+  }
+  .cta-notes .dot { margin: 0 8px; opacity: .5; }
+
+  /* ---- sections ---- */
+  section { padding: 56px 0; border-top: 1px solid var(--line); }
+  .eyebrow {
+    font-family: var(--mono); font-size: 12.5px; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--accent); margin-bottom: 14px;
+  }
+  h2 {
+    font-family: var(--display); font-weight: 700;
+    font-size: clamp(26px, 4.5vw, 34px); letter-spacing: -0.02em;
+    margin-bottom: 12px;
+  }
+  .lede { color: var(--fade); max-width: 40em; }
+
+  /* how it works */
+  .steps {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px;
+    margin-top: 34px;
+  }
+  .step {
+    background: var(--mist); border-radius: 16px; padding: 22px 20px;
+  }
+  .step kbd {
+    display: inline-block; font-family: var(--mono); font-size: 15px;
+    background: var(--card); border: 1px solid var(--line);
+    border-bottom-width: 3px; border-radius: 8px; padding: 4px 12px;
+    margin-bottom: 12px;
+  }
+  .step strong { display: block; font-family: var(--display); font-size: 18px; margin-bottom: 4px; }
+  .step p { font-size: 15px; color: var(--fade); }
+
+  /* entry card — mirrors the app's library view */
+  .entry {
+    margin-top: 34px; background: var(--card);
+    border: 1px solid var(--line); border-radius: 18px;
+    padding: 22px 24px; text-align: left;
+    box-shadow: 0 8px 30px rgba(27, 24, 48, 0.05);
+  }
+  .entry-head {
+    display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+    font-family: var(--mono); font-size: 13px; color: var(--fade);
+    margin-bottom: 16px;
+  }
+  .pill {
+    font-size: 11.5px; padding: 2px 9px; border-radius: 999px;
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    color: var(--accent); font-family: var(--body); font-weight: 600;
+  }
+  .entry .raw {
+    font-family: var(--mono); font-size: 15px; color: var(--fade);
+    text-decoration: line-through;
+    text-decoration-color: color-mix(in srgb, var(--accent) 45%, transparent);
+    margin-bottom: 12px;
+  }
+  .entry .clean { font-size: 17px; }
+  .entry .clean::before {
+    content: "→ "; color: var(--ok); font-family: var(--mono);
+  }
+
+  /* features */
+  .grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 34px;
+  }
+  .card {
+    background: var(--mist); border-radius: 16px; padding: 24px;
+  }
+  .card strong {
+    display: block; font-family: var(--display); font-size: 18px;
+    letter-spacing: -0.01em; margin-bottom: 6px;
+  }
+  .card p { font-size: 15px; color: var(--fade); }
+  .card code { font-family: var(--mono); font-size: 13.5px; }
+
+  /* local-first file */
+  .file {
+    margin-top: 34px; background: var(--card);
+    border: 1px solid var(--line); border-radius: 18px; overflow: hidden;
+  }
+  .file-tab {
+    font-family: var(--mono); font-size: 13px; color: var(--fade);
+    padding: 12px 20px; border-bottom: 1px solid var(--line);
+    background: var(--mist);
+  }
+  .file pre {
+    font-family: var(--mono); font-size: 14px; line-height: 1.7;
+    padding: 20px 24px; overflow-x: auto; color: var(--ink);
+  }
+  .file .fm { color: var(--fade); }
+  .file .k { color: var(--accent); }
+
+  /* footer */
+  footer {
+    border-top: 1px solid var(--line);
+    padding: 40px 0 56px; text-align: center;
+    font-size: 14.5px; color: var(--fade);
+  }
+  footer a { color: var(--fade); }
+  footer a:hover { color: var(--accent); }
+  footer .dot { margin: 0 10px; opacity: .5; }
+
+  @media (max-width: 640px) {
+    .steps, .grid { grid-template-columns: 1fr; }
+    header { padding: 44px 0 60px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <nav>
+    <a class="wordmark" href="#">
+      <svg width="26" height="26" viewBox="0 0 64 64" aria-hidden="true">
+        <rect width="64" height="64" rx="14" fill="#7359F2"/>
+        <g fill="#fff">
+          <rect x="10" y="24" width="4" height="16" rx="2"/>
+          <rect x="18" y="18" width="4" height="28" rx="2"/>
+          <rect x="26" y="27" width="4" height="10" rx="2"/>
+          <rect x="34" y="27" width="4" height="10" rx="2"/>
+          <rect x="42" y="18" width="4" height="28" rx="2"/>
+          <rect x="50" y="24" width="4" height="16" rx="2"/>
+        </g>
+      </svg>
+      VoiceVector
+    </a>
+    <a class="gh" href="https://github.com/Sammons/voicevector">GitHub</a>
+  </nav>
+</div>
+
+<header class="wrap">
+  <div class="wave" aria-hidden="true">
+    <i style="--h:.5; --d:0s"></i><i style="--h:.9; --d:.15s"></i><i style="--h:.6; --d:.3s"></i>
+    <i style="--h:.3; --d:.45s"></i><i style="--h:.15; --d:.6s"></i><i style="--h:.3; --d:.75s"></i>
+    <i style="--h:.6; --d:.9s"></i><i style="--h:.9; --d:1.05s"></i><i style="--h:.5; --d:1.2s"></i>
+  </div>
+
+  <div class="dictation">
+    <p class="raw-take" aria-hidden="true">um so like, you hold the key and you just— and it, uh, you know, types?</p>
+    <h1>Speak.<br>It <span class="accent">types.</span></h1>
+  </div>
+
+  <p class="sub">VoiceVector is a native dictation app for macOS and Windows.
+  Hold a key, talk, and clean text lands wherever your cursor is —
+  terminal, editor, anywhere.</p>
+
+  <div class="cta-row">
+    <a class="btn btn-primary" href="https://github.com/Sammons/voicevector/releases/latest/download/VoiceVector-macos.zip">Download for macOS</a>
+    <a class="btn btn-quiet" href="https://github.com/Sammons/voicevector/releases/latest/download/VoiceVector-windows-x64.zip">Download for Windows</a>
+  </div>
+  <p class="cta-notes">
+    macOS: signed &amp; notarized — opens first try
+    <span class="dot">·</span>
+    Windows: unsigned preview — right-click the zip → Unblock before extracting
+  </p>
+</header>
+
+<section>
+  <div class="wrap">
+    <p class="eyebrow">How it works</p>
+    <h2>Three moves, no windows</h2>
+    <p class="lede">No app to switch to and nothing to click. Dictation happens in
+    whatever you're already typing in.</p>
+
+    <div class="steps">
+      <div class="step">
+        <kbd>⌥ hold</kbd>
+        <strong>Hold to talk</strong>
+        <p>Or double-tap to latch for longer dictations. Esc cancels.</p>
+      </div>
+      <div class="step">
+        <kbd>· · ·</kbd>
+        <strong>Speak your mind</strong>
+        <p>Pause to think — finished phrases transcribe in the background while you talk.</p>
+      </div>
+      <div class="step">
+        <kbd>⌘V</kbd>
+        <strong>Release</strong>
+        <p>Cleaned text is pasted at your cursor. Your clipboard is put back the way it was.</p>
+      </div>
+    </div>
+
+    <div class="entry">
+      <div class="entry-head">
+        <span>Inbox / 20260825-161725</span>
+        <span class="pill">streamed 2 parts</span>
+        <span>0:15</span>
+      </div>
+      <p class="raw">um so can you uh add the the vercel gateway support and— yeah just that for now</p>
+      <p class="clean">Can you add the Vercel gateway support? Just that for now.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <p class="eyebrow">Features</p>
+    <h2>Simple on purpose</h2>
+    <p class="lede">Dictation tools keep growing dashboards. VoiceVector grows in the
+    other direction: fewer moving parts, more of them yours.</p>
+
+    <div class="grid">
+      <div class="card">
+        <strong>Bring your own brain</strong>
+        <p>ElevenLabs, Cerebras, Vercel AI Gateway, or any OpenAI-compatible
+        server — including one on your own machine. API keys live in your
+        keychain, never in a config file.</p>
+      </div>
+      <div class="card">
+        <strong>Streams while you think</strong>
+        <p>A few seconds of silence sends the phrase ahead for transcription.
+        Long dictations finish in the time of the last sentence.</p>
+      </div>
+      <div class="card">
+        <strong>One call, not two</strong>
+        <p>Point transcription and cleanup at the same audio-capable model and
+        VoiceVector sends your voice and the cleanup prompt in a single request.</p>
+      </div>
+      <div class="card">
+        <strong>The prompt is yours</strong>
+        <p>The exact cleanup instructions are visible and editable in settings.
+        Add your vocabulary — names, jargon, product words — and the models
+        respect it.</p>
+      </div>
+      <div class="card">
+        <strong>Files, not a database</strong>
+        <p>Every recording is a <code>.wav</code>, every transcript a
+        <code>.md</code> in a folder you can see. Grep them, sync them, or
+        forward a folder to a webhook.</p>
+      </div>
+      <div class="card">
+        <strong>Quiet engineering</strong>
+        <p>Zero third-party dependencies. Signed and notarized on macOS.
+        One-click updates that verify the publisher before installing.
+        Source available, all of it — free for individuals and
+        organizations under 1,000 people.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <p class="eyebrow">Local first</p>
+    <h2>Your words stay yours</h2>
+    <p class="lede">VoiceVector is just a viewer over plain files. Delete the app
+    and every dictation you ever made is still sitting in your documents,
+    readable by anything.</p>
+
+    <div class="file">
+      <div class="file-tab">~/Documents/VoiceVector/Inbox/20260825-161725.md</div>
+      <pre><span class="fm">---
+<span class="k">date:</span> 2026-08-25T21:17:40Z
+<span class="k">duration:</span> 15.1
+<span class="k">audio:</span> 20260825-161725.wav
+<span class="k">stt:</span> ElevenLabs/scribe_v2
+<span class="k">cleanup:</span> Cerebras/gpt-oss-120b
+<span class="k">status:</span> complete
+---</span>
+
+Can you add the Vercel gateway support? Just that for now.
+
+## Raw transcript
+
+um so can you uh add the the vercel gateway support and— yeah
+just that for now</pre>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    © 2026 Sammons Software LLC
+    <span class="dot">·</span>
+    <a href="https://github.com/Sammons/voicevector/blob/main/LICENSE">Free under 1,000 employees</a>
+    <span class="dot">·</span>
+    <a href="https://github.com/Sammons/voicevector/blob/main/COMMERCIAL.md">Commercial license</a>
+    <span class="dot">·</span>
+    <a href="https://github.com/Sammons/voicevector">Source on GitHub</a>
+    <span class="dot">·</span>
+    <a href="https://github.com/Sammons/voicevector/releases">All releases</a>
+  </div>
+</footer>
+
+</body>
+</html>
