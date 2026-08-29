@@ -105,14 +105,24 @@ final class DictationController: ObservableObject {
             recorder.onSegment = nil
         }
 
-        do {
-            try recorder.start(to: slot.audioURL)
-            state = .recording
-            if configStore.config.playSounds { Chime.shared.playStart() }
-        } catch {
-            currentSlot = nil
-            state = .failed("Could not start recording: \(error.localizedDescription)")
-            Chime.shared.playError()
+        // Show the HUD right away; the device opens in the background (an
+        // external USB interface can take a beat) and reports back here.
+        state = .recording
+        let slotID = slot.id
+        recorder.start(to: slot.audioURL) { [weak self] error in
+            guard let self else { return }
+            if let error {
+                if self.currentSlot?.id == slotID {
+                    self.currentSlot = nil
+                    self.state = .failed("Could not start recording: \(error.localizedDescription)")
+                } else {
+                    self.state = .failed("Could not start recording: \(error.localizedDescription)")
+                }
+                Chime.shared.playError()
+            } else if self.state == .recording, self.currentSlot?.id == slotID,
+                      self.configStore.config.playSounds {
+                Chime.shared.playStart()
+            }
         }
     }
 

@@ -39,7 +39,24 @@ final class Recorder {
         AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
     }
 
-    func start(to url: URL) throws {
+    /// Opens the input device and starts capturing. Runs on the recorder
+    /// queue because opening an external interface (USB audio, clock lock,
+    /// high sample rates) can take a noticeable fraction of a second — the
+    /// caller shows the HUD immediately and hears about failures via
+    /// `completion` on the main thread. `stop()`/`discard()` serialize behind
+    /// a start still in flight.
+    func start(to url: URL, completion: @escaping (Error?) -> Void) {
+        queue.async { [self] in
+            do {
+                try startOnQueue(to: url)
+                DispatchQueue.main.async { completion(nil) }
+            } catch {
+                DispatchQueue.main.async { completion(error) }
+            }
+        }
+    }
+
+    private func startOnQueue(to url: URL) throws {
         guard writer == nil else { return }
 
         let input = engine.inputNode
@@ -77,21 +94,27 @@ final class Recorder {
     /// Stops capture, closes the file. Returns duration in seconds.
     @discardableResult
     func stop() -> Double {
-        guard let writer else { return 0 }
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
-        self.writer = nil
-        converter = nil
-        level = 0
         var duration: Double = 0
-        queue.sync { duration = writer.finalize() }
-        startedAt = nil
+        queue.sync { [self] in
+            guard let writer else { return }
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+            self.writer = nil
+            converter = nil
+            level = 0
+            duration = writer.finalize()
+            startedAt = nil
+            // Keep render resources allocated so the next start is quicker.
+            engine.prepare()
+        }
         return duration
     }
 
     /// Stops and deletes the file (canceled/stray recordings).
     func discard() {
-        guard let url = writer?.url else { return }
+        var url: URL?
+        queue.sync { url = writer?.url }
+        guard let url else { return }
         stop()
         try? FileManager.default.removeItem(at: url)
     }
