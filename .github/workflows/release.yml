@@ -8,8 +8,22 @@ permissions:
   contents: write
 
 jobs:
+  notes:
+    name: Create release from CHANGELOG
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Create the GitHub release with this version's changelog entry
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sh scripts/release-notes.sh "$GITHUB_REF_NAME" > notes.md
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --title "VoiceVector $GITHUB_REF_NAME" --notes-file notes.md
+
   windows:
     name: Release Windows (win-x64)
+    needs: notes
     runs-on: windows-latest
     environment: release   # OIDC federation subject for Azure signing
     permissions:
@@ -58,11 +72,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$env:GITHUB_REF_NAME" --title "VoiceVector $env:GITHUB_REF_NAME" --generate-notes 2>$null
           gh release upload "$env:GITHUB_REF_NAME" VoiceVector-windows-x64.zip --clobber
 
   macos:
     name: Release macOS
+    needs: notes
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -109,5 +123,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --title "VoiceVector $GITHUB_REF_NAME" --generate-notes 2>/dev/null || true
           gh release upload "$GITHUB_REF_NAME" VoiceVector-macos.zip --clobber

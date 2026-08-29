@@ -730,6 +730,7 @@ struct GeneralSettings: View {
 struct AboutSettings: View {
     private static let website = URL(string: "https://voicevector.sammons.io")!
     private static let source = URL(string: "https://github.com/Sammons/voicevector")!
+    private static let changelog = URL(string: "https://github.com/Sammons/voicevector/blob/main/CHANGELOG.md")!
     private static let license = URL(string: "https://github.com/Sammons/voicevector/blob/main/LICENSE")!
     private static let commercial = URL(string: "https://github.com/Sammons/voicevector/blob/main/COMMERCIAL.md")!
     private static let email = URL(string: "mailto:sales@sammons.io?subject=VoiceVector%20commercial%20license")!
@@ -752,6 +753,7 @@ struct AboutSettings: View {
                         .foregroundStyle(.secondary)
                     HStack(spacing: 14) {
                         Link("Website", destination: Self.website)
+                        Link("What's new", destination: Self.changelog)
                         Link("Source on GitHub", destination: Self.source)
                     }
                     .font(.callout)

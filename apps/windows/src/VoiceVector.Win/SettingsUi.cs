@@ -630,6 +630,8 @@ namespace VoiceVector.Win
             stack.Children.Add(Theme.Text("© 2026 Sammons Software LLC. All rights reserved.", 12, secondary: true));
             var links = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 10) };
             links.Children.Add(LinkButton("Website", "https://voicevector.sammons.io"));
+            links.Children.Add(LinkButton("What's new",
+                "https://github.com/Sammons/voicevector/blob/main/CHANGELOG.md"));
             links.Children.Add(LinkButton("Source on GitHub", "https://github.com/Sammons/voicevector"));
             stack.Children.Add(links);
 

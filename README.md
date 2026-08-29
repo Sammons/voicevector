@@ -40,7 +40,9 @@ open first try. Windows builds are unsigned for now — use "Run anyway" or
 
 Build: `make macos` / `make windows` (see each app's README for details).
 Both apps carry a built-in dependency-free test suite: `--self-test`.
-Releases: push a `v*` tag — CI builds, tests, and attaches both zips.
+Releases: add the version's entry to [CHANGELOG.md](CHANGELOG.md), then push
+a `v*` tag — CI creates the GitHub release from that entry, builds, tests, and
+attaches both zips.
 
 ## License
 
