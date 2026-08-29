@@ -25,15 +25,25 @@ final class Recorder {
     /// un-boosted inputs (audio interfaces at conservative gain) still
     /// segment; anything above the absolute ceiling always counts.
     private let voiceRMSCeiling: Float = 0.015
-    private let voiceRMSFloor: Float = 0.003
+    private let voiceRMSFloor: Float = 0.001
     private var noiseFloor: Float = 0.001
+    /// Slowly-decaying recent peak the HUD meter auto-ranges against.
+    private var peakRMS: Float = 0.002
 
-    /// Perceptual level for the HUD: −58 dBFS → 0, −13 dBFS → 1. A linear
-    /// scale looked dead on interfaces that sit 30–40 dB below a built-in
-    /// mic's auto-gained signal even though the recording was fine.
-    static func displayLevel(rms: Float) -> Float {
-        let db = 20 * log10(max(rms, 1e-6))
-        return min(1, max(0, (db + 58) / 45))
+    /// Auto-ranging perceptual level for the HUD. The meter follows the recent
+    /// peak, so a conservatively-gained audio interface (speech peaking near
+    /// −40 dBFS — still transcribes perfectly) animates as fully as a hot
+    /// built-in mic: full scale at the recent peak, zero 30 dB below it, and
+    /// pinned to zero near the tracked noise floor.
+    static func displayLevel(rms: Float, peak: Float, noise: Float) -> Float {
+        guard rms > noise * 2 else { return 0 }
+        let db = 20 * log10(max(rms, 1e-6) / max(peak, 1e-6))
+        return min(1, max(0, (db + 30) / 30))
+    }
+
+    private func meter(_ rms: Float) -> Float {
+        if rms > peakRMS { peakRMS = rms } else { peakRMS = max(0.002, peakRMS * 0.995) }
+        return Self.displayLevel(rms: rms, peak: peakRMS, noise: noiseFloor)
     }
 
     /// Adaptive VAD: true when `rms` is clearly above the running noise floor.
@@ -103,6 +113,7 @@ final class Recorder {
         voicedInSegment = false
         lastVoicedAt = ProcessInfo.processInfo.systemUptime
         noiseFloor = 0.001
+        peakRMS = 0.002
 
         input.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
             self?.queue.async { self?.process(buffer: buffer, converter: converter, writer: writer) }
@@ -195,7 +206,7 @@ final class Recorder {
         let rms = Self.sourceRMS(buffer)
         if buffer.frameLength > 0 {
             // Smooth decay so the waveform breathes.
-            level = max(Self.displayLevel(rms: rms), level * 0.7)
+            level = max(meter(rms), level * 0.7)
         }
 
         // Silence-gap segmentation for streamed transcription.

@@ -34,15 +34,24 @@ namespace VoiceVector.Win.Services
         // un-boosted inputs (audio interfaces at conservative gain) still
         // segment; anything above the absolute ceiling always counts.
         private const float VoiceRmsCeiling = 0.015f;
-        private const float VoiceRmsFloor = 0.003f;
+        private const float VoiceRmsFloor = 0.001f;
         private float _noiseFloor = 0.001f;
+        private float _peakRms = 0.002f;
 
-        /// <summary>Perceptual level for the HUD: −58 dBFS → 0, −13 dBFS → 1
-        /// (mirrors the macOS meter).</summary>
-        public static float DisplayLevel(float rms)
+        /// <summary>Auto-ranging perceptual level for the HUD (mirrors macOS):
+        /// full scale at the recent peak, zero 30 dB below it, pinned to zero
+        /// near the noise floor — so quiet interfaces animate too.</summary>
+        public static float DisplayLevel(float rms, float peak, float noise)
         {
-            var db = 20 * Math.Log10(Math.Max(rms, 1e-6));
-            return (float)Math.Min(1, Math.Max(0, (db + 58) / 45));
+            if (rms <= noise * 2) return 0;
+            var db = 20 * Math.Log10(Math.Max(rms, 1e-6) / Math.Max(peak, 1e-6));
+            return (float)Math.Min(1, Math.Max(0, (db + 30) / 30));
+        }
+
+        private float Meter(float rms)
+        {
+            if (rms > _peakRms) _peakRms = rms; else _peakRms = Math.Max(0.002f, _peakRms * 0.995f);
+            return DisplayLevel(rms, _peakRms, _noiseFloor);
         }
 
         private bool IsVoiced(float rms)
@@ -90,6 +99,7 @@ namespace VoiceVector.Win.Services
             _thread = null;
             Level = 0;
             _noiseFloor = 0.001f;
+            _peakRms = 0.002f;
             _startedAt = default(DateTime);
             return writer.FinalizeFile();
         }
@@ -237,7 +247,7 @@ namespace VoiceVector.Win.Services
             float rms = 0;
             for (int i = 0; i < frames; i++) rms += mono[i] * mono[i];
             rms = (float)Math.Sqrt(rms / frames);
-            Level = Math.Max(DisplayLevel(rms), Level * 0.7f);
+            Level = Math.Max(Meter(rms), Level * 0.7f);
 
             // Linear resample source-rate → 16 kHz.
             int outCount = 0;

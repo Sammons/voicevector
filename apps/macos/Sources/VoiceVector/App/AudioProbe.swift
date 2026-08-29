@@ -37,7 +37,7 @@ enum AudioProbe {
                 perChannel.append(String(format: "%.5f", sqrt(sum / Float(max(frames, 1)))))
             }
             let meter = Recorder.sourceRMS(buffer)
-            print("buffer \(buffers): frames=\(frames) rms/ch=\(perChannel) sourceRMS=\(String(format: "%.5f", meter)) level=\(String(format: "%.2f", Recorder.displayLevel(rms: meter)))")
+            print("buffer \(buffers): frames=\(frames) rms/ch=\(perChannel) sourceRMS=\(String(format: "%.5f", meter)) level=\(String(format: "%.2f", Recorder.displayLevel(rms: meter, peak: 0.005, noise: 0.0005)))")
         }
         do {
             engine.prepare()
