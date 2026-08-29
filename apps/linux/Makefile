@@ -37,7 +37,24 @@ $(BUILD)/voicevector: $(BUILD)/prompts.h $(CORE_SRC) $(PLAT_SRC) $(UI_SRC) src/m
 test: $(BUILD)/voicevector-core
 	cd ../.. && apps/linux/$(BUILD)/voicevector-core --self-test
 
+PREFIX ?= $(HOME)/.local
+install: $(BUILD)/voicevector
+	install -Dm755 $(BUILD)/voicevector $(PREFIX)/bin/voicevector
+	install -Dm644 data/io.sammons.voicevector.desktop $(PREFIX)/share/applications/io.sammons.voicevector.desktop
+	-update-desktop-database $(PREFIX)/share/applications 2>/dev/null
+	@echo "installed to $(PREFIX)/bin/voicevector (the .desktop file lets the portals identify the app)"
+
+uninstall:
+	rm -f $(PREFIX)/bin/voicevector $(PREFIX)/share/applications/io.sammons.voicevector.desktop
+
+dist: $(BUILD)/voicevector
+	@mkdir -p $(BUILD)/dist/voicevector
+	cp $(BUILD)/voicevector data/io.sammons.voicevector.desktop README.md $(BUILD)/dist/voicevector/
+	cp scripts/install.sh $(BUILD)/dist/voicevector/install.sh
+	tar -C $(BUILD)/dist -czf $(BUILD)/VoiceVector-linux-$(shell uname -m).tar.gz voicevector
+	@ls -la $(BUILD)/VoiceVector-linux-$(shell uname -m).tar.gz | awk '{print "✓ " $$9 " (" $$5 " bytes)"}'
+
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all core test clean
+.PHONY: all core test install uninstall dist clean

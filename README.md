@@ -38,7 +38,7 @@ E2E-tested by CI. macOS builds are Developer ID signed and notarized — they
 open first try. Windows builds are unsigned for now — use "Run anyway" or
 `Unblock-File` on the zip before extracting.
 
-Build: `make macos` / `make windows` (see each app's README for details).
+Build: `make macos` / `make windows` / `make -C apps/linux` (see each app's README for details).
 Both apps carry a built-in dependency-free test suite: `--self-test`.
 Releases: add the version's entry to [CHANGELOG.md](CHANGELOG.md), then push
 a `v*` tag — CI creates the GitHub release from that entry, builds, tests, and

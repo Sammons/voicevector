@@ -74,6 +74,26 @@ jobs:
         run: |
           gh release upload "$env:GITHUB_REF_NAME" VoiceVector-windows-x64.zip --clobber
 
+  linux:
+    name: Release Linux (x86_64)
+    needs: notes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install system libraries
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq build-essential pkg-config \
+            libglib2.0-dev libcurl4-openssl-dev libgtk-4-dev libadwaita-1-dev libsecret-1-dev libpulse-dev
+      - name: Build, self-test, package
+        run: |
+          make -C apps/linux dist VERSION="${GITHUB_REF_NAME#v}"
+          apps/linux/build/voicevector --self-test
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" apps/linux/build/VoiceVector-linux-x86_64.tar.gz --clobber
+
   macos:
     name: Release macOS
     needs: notes

@@ -20,8 +20,8 @@ jobs:
           dotnet-version: "10.0.x"
       - run: dotnet run --project apps/windows/src/VoiceVector.SelfTest
 
-  linux-core:
-    name: Linux core (C) self-test
+  linux-app:
+    name: Linux app (C, GTK4)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -29,9 +29,15 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq build-essential pkg-config \
-            libglib2.0-dev libcurl4-openssl-dev
+            libglib2.0-dev libcurl4-openssl-dev libgtk-4-dev libadwaita-1-dev libsecret-1-dev libpulse-dev
       - name: Build core and run the self-test
         run: make -C apps/linux test
+      - name: Build the app and package
+        run: make -C apps/linux dist && apps/linux/build/voicevector --self-test
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: VoiceVector-linux
+          path: apps/linux/build/VoiceVector-linux-*.tar.gz
 
   windows-app:
     name: Windows app (win-x64)
