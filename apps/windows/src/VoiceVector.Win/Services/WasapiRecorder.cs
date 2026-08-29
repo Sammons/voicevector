@@ -41,17 +41,19 @@ namespace VoiceVector.Win.Services
         /// <summary>Auto-ranging perceptual level for the HUD (mirrors macOS):
         /// full scale at the recent peak, zero 30 dB below it, pinned to zero
         /// near the noise floor — so quiet interfaces animate too.</summary>
-        public static float DisplayLevel(float rms, float peak, float noise)
+        public static float DisplayLevel(float rms, float peak)
         {
-            if (rms <= noise * 2) return 0;
             var db = 20 * Math.Log10(Math.Max(rms, 1e-6) / Math.Max(peak, 1e-6));
             return (float)Math.Min(1, Math.Max(0, (db + 30) / 30));
         }
 
-        private float Meter(float rms)
+        /// <summary>The HUD shows exactly what the silence-gap detector hears:
+        /// bars move only for buffers the VAD calls voiced.</summary>
+        private float Meter(float rms, bool voiced)
         {
+            if (!voiced) return 0;
             if (rms > _peakRms) _peakRms = rms; else _peakRms = Math.Max(0.002f, _peakRms * 0.995f);
-            return DisplayLevel(rms, _peakRms, _noiseFloor);
+            return DisplayLevel(rms, _peakRms);
         }
 
         private bool IsVoiced(float rms)
@@ -247,7 +249,8 @@ namespace VoiceVector.Win.Services
             float rms = 0;
             for (int i = 0; i < frames; i++) rms += mono[i] * mono[i];
             rms = (float)Math.Sqrt(rms / frames);
-            Level = Math.Max(Meter(rms), Level * 0.7f);
+            bool voiced = IsVoiced(rms);
+            Level = Math.Max(Meter(rms, voiced), Level * 0.7f);
 
             // Linear resample source-rate → 16 kHz.
             int outCount = 0;
@@ -275,7 +278,7 @@ namespace VoiceVector.Win.Services
             if (Chunking)
             {
                 double now = Now;
-                if (IsVoiced(rms))
+                if (voiced)
                 {
                     _lastVoicedAt = now;
                     _voicedInSegment = true;

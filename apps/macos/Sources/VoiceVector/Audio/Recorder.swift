@@ -35,15 +35,17 @@ final class Recorder {
     /// −40 dBFS — still transcribes perfectly) animates as fully as a hot
     /// built-in mic: full scale at the recent peak, zero 30 dB below it, and
     /// pinned to zero near the tracked noise floor.
-    static func displayLevel(rms: Float, peak: Float, noise: Float) -> Float {
-        guard rms > noise * 2 else { return 0 }
+    static func displayLevel(rms: Float, peak: Float) -> Float {
         let db = 20 * log10(max(rms, 1e-6) / max(peak, 1e-6))
         return min(1, max(0, (db + 30) / 30))
     }
 
-    private func meter(_ rms: Float) -> Float {
+    /// The HUD shows exactly what the silence-gap detector hears: bars move
+    /// only for buffers the VAD calls voiced, so a quiet room reads as flat.
+    private func meter(_ rms: Float, voiced: Bool) -> Float {
+        guard voiced else { return 0 }
         if rms > peakRMS { peakRMS = rms } else { peakRMS = max(0.002, peakRMS * 0.995) }
-        return Self.displayLevel(rms: rms, peak: peakRMS, noise: noiseFloor)
+        return Self.displayLevel(rms: rms, peak: peakRMS)
     }
 
     /// Adaptive VAD: true when `rms` is clearly above the running noise floor.
@@ -204,15 +206,16 @@ final class Recorder {
         // any channel count, interleaved or not — the loudest channel wins so
         // a mic on input 2 still meters. Also drives silence-gap chunking.
         let rms = Self.sourceRMS(buffer)
+        let voiced = isVoiced(rms)
         if buffer.frameLength > 0 {
             // Smooth decay so the waveform breathes.
-            level = max(meter(rms), level * 0.7)
+            level = max(meter(rms, voiced: voiced), level * 0.7)
         }
 
         // Silence-gap segmentation for streamed transcription.
         if chunking {
             let now = ProcessInfo.processInfo.systemUptime
-            if isVoiced(rms) {
+            if voiced {
                 lastVoicedAt = now
                 voicedInSegment = true
             } else if voicedInSegment, now - lastVoicedAt >= silenceCutAfter {
