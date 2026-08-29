@@ -53,6 +53,8 @@ namespace VoiceVector.Win
                     Dictation = new DictationController(() => Config, () => Lib, Hook,
                                                         app.Dispatcher);
                     Hook.OnAction += Dictation.Handle;
+                    Hook.OnReviewAccept += Dictation.AcceptReview;
+                    Hook.OnReviewDiscard += Dictation.DiscardReview;
                     Hook.Start();
                     if (Environment.GetEnvironmentVariable("VV_FAKE_AUDIO") == null)
                         Dictation.ApplyWarmPolicy();

@@ -450,6 +450,41 @@ struct ProfileRow: View {
                     .font(.caption)
                     Spacer()
                 }
+                HStack(spacing: 8) {
+                    Toggle("Review before pasting", isOn: binding(\.reviewBeforePaste))
+                        .toggleStyle(.checkbox)
+                    Toggle("Screenshot context", isOn: binding(\.screenshotContext))
+                        .toggleStyle(.checkbox)
+                    Spacer()
+                }
+                if profile.reviewBeforePaste {
+                    HStack(spacing: 8) {
+                        Picker("Review model", selection: binding(\.reviewProviderID)) {
+                            Text("Same as cleanup").tag(UUID?.none)
+                            ForEach(chatProviders) { p in
+                                Text("\(p.name) — \(p.chatModel)").tag(Optional(p.id))
+                            }
+                        }
+                        .frame(maxWidth: 330)
+                        Spacer()
+                    }
+                    Text("The cleaned text is staged above the recording pill instead of pasted. Press the hotkey and say a change (\"make it shorter\", \"turn that into a list\") as many times as you like; ⏎ pastes, Esc discards.")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if profile.screenshotContext {
+                    HStack(spacing: 8) {
+                        Text("A screenshot of the frontmost window is attached to cleanup and review calls so the model knows what you're looking at. Needs Screen Recording; models without vision ignore it.")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if !app.screenRecordingGranted {
+                            Button("Grant…") { ScreenCapture.requestPermission() }
+                                .controlSize(.small)
+                        }
+                    }
+                }
                 if showVocabulary {
                     TextEditor(text: binding(\.vocabulary))
                         .font(.system(.callout, design: .monospaced))
@@ -680,6 +715,10 @@ struct GeneralSettings: View {
                     }
                     PermissionRow(name: "Accessibility (hotkey & paste)", granted: app.accessibilityGranted) {
                         app.requestAccessibility()
+                    }
+                    PermissionRow(name: "Screen Recording (optional — screenshot context)",
+                                  granted: app.screenRecordingGranted) {
+                        ScreenCapture.requestPermission()
                     }
                     Button("Re-check") { app.refreshPermissions() }
                         .font(.caption)

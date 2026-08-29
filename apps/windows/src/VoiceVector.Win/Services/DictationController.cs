@@ -15,7 +15,25 @@ namespace VoiceVector.Win.Services
     /// </summary>
     public sealed class DictationController
     {
-        public enum StateKind { Idle, Recording, Processing, Failed }
+        public enum StateKind { Idle, Recording, Processing, Reviewing, Failed }
+
+        /// <summary>Text staged in the HUD while a review session is active.</summary>
+        public string ReviewDraft { get; private set; }
+
+        private sealed class ReviewSession
+        {
+            public Entry Entry;
+            public string AudioPath;
+            public string Folder;
+            public AppConfig Config;
+            public DictationProfile Profile;
+            public CleanupEngine.EffectiveCleanup Policy;
+            public byte[] Screenshot;
+            public int Revisions;
+        }
+        private ReviewSession _review;
+        private string _commandPath;
+        private byte[] _pendingScreenshot;
 
         public StateKind State { get; private set; }
         public string StateDetail { get; private set; }
@@ -80,6 +98,7 @@ namespace VoiceVector.Win.Services
         public void StartRecording(Guid? profileId = null)
         {
             if (IsBusy) return;
+            if (State == StateKind.Reviewing) { StartCommandRecording(); return; }
             var config = _config();
             _activeProfileId = profileId
                 ?? (config.DictationProfiles.Count > 0 ? config.DictationProfiles[0].Id : Guid.Empty);
@@ -87,6 +106,12 @@ namespace VoiceVector.Win.Services
             var slot = _library().NewEntrySlot(folder);
             _slot = slot;
             _slotFolder = folder;
+
+            // Screenshot of what the user is looking at, before anything moves.
+            _pendingScreenshot = null;
+            var startProfile = config.DictationProfiles.FirstOrDefault(p => p.Id == _activeProfileId);
+            if (startProfile != null && startProfile.ScreenshotContext && FakeAudioPath == null)
+                _pendingScreenshot = ScreenCapture.ForegroundWindowJpeg();
 
             // Arm silence-gap streaming (not with fake audio or single-pass).
             lock (_segmentLock) _segmentTasks.Clear();
@@ -137,6 +162,7 @@ namespace VoiceVector.Win.Services
 
         public void FinishRecording()
         {
+            if (_review != null && _commandPath != null) { FinishCommandRecording(); return; }
             if (State != StateKind.Recording || _slot == null) return;
             var slot = _slot.Value;
             var folder = _slotFolder;
@@ -174,6 +200,155 @@ namespace VoiceVector.Win.Services
             Recorder.Discard();
             _slot = null;
             _hook.RecordingActive = false;
+            if (_review != null && _commandPath != null)
+            {
+                _commandPath = null;
+                SetState(StateKind.Reviewing, "");
+            }
+            else
+            {
+                SetState(StateKind.Idle, "");
+            }
+        }
+
+        // -- review session (staged draft, spoken revisions) -----------------------
+
+        private void BeginReview(Entry entry, string audioPath, string folder, AppConfig config,
+                                 DictationProfile profile, CleanupEngine.EffectiveCleanup policy)
+        {
+            _review = new ReviewSession
+            {
+                Entry = entry, AudioPath = audioPath, Folder = folder, Config = config,
+                Profile = profile, Policy = policy, Screenshot = _pendingScreenshot,
+            };
+            ReviewDraft = entry.Cleaned;
+            SetState(StateKind.Reviewing, "");
+        }
+
+        private static ProviderProfile ReviewProvider(ReviewSession session)
+        {
+            if (session.Profile != null && session.Profile.ReviewProviderId.HasValue)
+            {
+                var chosen = session.Config.Providers.FirstOrDefault(
+                    p => p.Id == session.Profile.ReviewProviderId.Value);
+                if (chosen != null) return chosen;
+            }
+            var cleanup = session.Policy.Provider;
+            if (cleanup != null && cleanup.Kind.SupportsChat() && cleanup.ChatModel.Length > 0) return cleanup;
+            return session.Config.Providers.FirstOrDefault(
+                p => p.Kind.SupportsChat() && p.ChatModel.Length > 0);
+        }
+
+        private void StartCommandRecording()
+        {
+            if (_review == null || State != StateKind.Reviewing) return;
+            var path = Path.Combine(Path.GetTempPath(), "vv-command-" + Guid.NewGuid().ToString("N") + ".wav");
+            _commandPath = path;
+            Recorder.Chunking = false;
+            Recorder.OnSegment = null;
+            try
+            {
+                Recorder.Start(path);
+                SetState(StateKind.Recording, "Listening for a change…");
+                _hook.RecordingActive = true;
+                Chime.PlayStart(_config().PlaySounds);
+            }
+            catch (Exception e)
+            {
+                _commandPath = null;
+                RaiseNotice("Could not record the change: " + e.Message);
+                SetState(StateKind.Reviewing, "");
+            }
+        }
+
+        private void FinishCommandRecording()
+        {
+            var session = _review;
+            var path = _commandPath;
+            if (session == null || path == null) return;
+            _commandPath = null;
+            _hook.RecordingActive = false;
+            var duration = Recorder.Stop();
+            Chime.PlayStop(_config().PlaySounds);
+            if (duration < 0.5)
+            {
+                try { File.Delete(path); } catch { }
+                SetState(StateKind.Reviewing, "");
+                return;
+            }
+            SetState(StateKind.Processing, "Hearing the change…");
+            var _ = ApplyCommandAsync(path, session);
+        }
+
+        private async Task ApplyCommandAsync(string path, ReviewSession session)
+        {
+            try
+            {
+                var stt = session.Policy.Stt;
+                var reviewer = ReviewProvider(session);
+                if (stt == null) { RaiseNotice("No transcription provider — pick one in Settings."); return; }
+                if (reviewer == null) { RaiseNotice("No review model — pick a cleanup or review model for this hotkey."); return; }
+                var vocabulary = CleanupEngine.ParseVocabulary(session.Policy.Config.Vocabulary);
+                var audio = File.ReadAllBytes(path);
+                var instruction = (await new ProviderClient(stt, KeyStore.GetApiKey(stt.Id))
+                    .TranscribeAsync(audio, "command.wav", vocabulary).ConfigureAwait(false)).Text.Trim();
+                var draft = ReviewDraft;
+                if (instruction.Length == 0 || draft == null) return;
+                SetState(StateKind.Processing, "Revising…");
+                var client = new ProviderClient(reviewer, KeyStore.GetApiKey(reviewer.Id));
+                var system = CleanupEngine.ReviewSystemPrompt(session.Policy.Config.Vocabulary);
+                var user = CleanupEngine.ReviewMessage(draft, instruction);
+                string reply;
+                if (session.Screenshot != null)
+                {
+                    try { reply = await client.ChatAsync(system, user, session.Screenshot).ConfigureAwait(false); }
+                    catch { reply = await client.ChatAsync(system, user).ConfigureAwait(false); }
+                }
+                else
+                {
+                    reply = await client.ChatAsync(system, user).ConfigureAwait(false);
+                }
+                ReviewDraft = CleanupEngine.PostProcess(reply, draft);
+                session.Revisions++;
+                session.Entry.CleanupLabel = session.Entry.CleanupLabel.Split(new[] { " · review " }, StringSplitOptions.None)[0]
+                    + " · review " + reviewer.Name + "/" + reviewer.ChatModel + " ×" + session.Revisions;
+            }
+            catch (Exception e)
+            {
+                Chime.PlayError();
+                RaiseNotice("Revision failed: " + e.Message);
+            }
+            finally
+            {
+                try { File.Delete(path); } catch { }
+                SetState(StateKind.Reviewing, "");
+            }
+        }
+
+        /// <summary>Enter while reviewing: save the draft and paste it.</summary>
+        public void AcceptReview()
+        {
+            var session = _review;
+            if (State != StateKind.Reviewing || session == null || ReviewDraft == null) return;
+            _review = null;
+            session.Entry.Cleaned = ReviewDraft;
+            ReviewDraft = null;
+            _library().Save(session.Entry);
+            RaiseLibraryChanged();
+            var _ = DeliverAsync(session.Entry, session.AudioPath, session.Folder, session.Config);
+        }
+
+        /// <summary>Esc while reviewing: keep the entry (with the draft) but don't paste.</summary>
+        public void DiscardReview()
+        {
+            var session = _review;
+            if (State != StateKind.Reviewing || session == null) return;
+            _review = null;
+            if (ReviewDraft != null) session.Entry.Cleaned = ReviewDraft;
+            ReviewDraft = null;
+            session.Entry.Status = "complete (not pasted)";
+            _library().Save(session.Entry);
+            RaiseLibraryChanged();
             SetState(StateKind.Idle, "");
         }
 
@@ -322,9 +497,22 @@ namespace VoiceVector.Win.Services
                         {
                             var client = new ProviderClient(cleanupProfile,
                                                             KeyStore.GetApiKey(cleanupProfile.Id));
-                            var reply = await client.ChatAsync(
-                                CleanupEngine.SystemPrompt(policy.Config),
-                                CleanupEngine.WrapTranscript(entry.Raw)).ConfigureAwait(false);
+                            var system = CleanupEngine.SystemPrompt(policy.Config);
+                            var user = CleanupEngine.WrapTranscript(entry.Raw);
+                            string reply;
+                            if (_pendingScreenshot != null)
+                            {
+                                try
+                                {
+                                    reply = await client.ChatAsync(system + "\n" + CleanupEngine.ScreenshotNote,
+                                                                   user, _pendingScreenshot).ConfigureAwait(false);
+                                }
+                                catch { reply = await client.ChatAsync(system, user).ConfigureAwait(false); }
+                            }
+                            else
+                            {
+                                reply = await client.ChatAsync(system, user).ConfigureAwait(false);
+                            }
                             entry.Cleaned = CleanupEngine.PostProcess(reply, entry.Raw);
                         }
                         catch (Exception e)
@@ -345,7 +533,18 @@ namespace VoiceVector.Win.Services
             library.Save(entry);
             RaiseLibraryChanged();
 
-            // 3. Paste.
+            // Staged review: hold the draft in the HUD until Enter / Esc.
+            if (dictationProfile != null && dictationProfile.ReviewBeforePaste && profileId != Guid.Empty)
+            {
+                BeginReview(entry, audioPath, folder, config, dictationProfile, policy);
+                return;
+            }
+            await DeliverAsync(entry, audioPath, folder, config).ConfigureAwait(false);
+        }
+
+        /// <summary>3. Paste into the foreground app, then 4. webhook (fire and forget).</summary>
+        private async Task DeliverAsync(Entry entry, string audioPath, string folder, AppConfig config)
+        {
             SetState(StateKind.Processing, "Pasting…");
             Diag.Breadcrumb("state Processing Pasting…");
             var outcome = await PasteService.InsertAsync(entry.Cleaned, config.AutoPaste)
@@ -354,7 +553,6 @@ namespace VoiceVector.Win.Services
                 RaiseNotice("Transcript copied — press Ctrl+V to insert it.");
             SetState(StateKind.Idle, "");
 
-            // 4. Webhook (fire and forget).
             WebhookConfig webhook;
             if (config.FolderWebhooks.TryGetValue(folder, out webhook) && webhook.Enabled)
             {

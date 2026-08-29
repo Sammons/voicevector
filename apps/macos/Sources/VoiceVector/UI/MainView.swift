@@ -61,6 +61,8 @@ struct MainView: View {
             return "Recording…"
         case .processing(let step):
             return step
+        case .reviewing:
+            return "Reviewing — press the hotkey to say a change, ⏎ to paste, Esc to discard"
         case .failed:
             return "Something went wrong"
         }

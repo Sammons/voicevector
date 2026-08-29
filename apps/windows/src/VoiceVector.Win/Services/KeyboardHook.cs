@@ -16,6 +16,11 @@ namespace VoiceVector.Win.Services
         public event Action<TapStateMachine.Act, Guid> OnAction;
         public Action<HotkeySpec> CaptureHandler;
         public bool RecordingActive;
+        /// <summary>A draft is staged for review: Enter accepts, Esc discards
+        /// (both swallowed so they never reach the app underneath).</summary>
+        public bool ReviewActive;
+        public event Action OnReviewAccept;
+        public event Action OnReviewDiscard;
 
         private readonly Func<AppConfig> _config;
         private readonly Dispatcher _dispatcher;
@@ -94,6 +99,17 @@ namespace VoiceVector.Win.Services
             if (RecordingActive && isDown && vk == Native.VK_ESCAPE)
             {
                 Emit(_machine.Cancel());
+                return (IntPtr)1;
+            }
+
+            if (ReviewActive && !RecordingActive && !_machine.IsActive
+                && (vk == 0x0D /* Enter */ || vk == Native.VK_ESCAPE))
+            {
+                if (isDown)
+                {
+                    var handler = vk == 0x0D ? OnReviewAccept : OnReviewDiscard;
+                    if (handler != null) _dispatcher.BeginInvoke(handler);
+                }
                 return (IntPtr)1;
             }
 

@@ -17,6 +17,9 @@ namespace VoiceVector.Win
     {
         private readonly TextBlock _label;
         private readonly TextBlock _clock;
+        private readonly Border _staging;
+        private readonly TextBlock _draft;
+        private readonly TextBlock _reviewHint;
         private readonly StackPanel _bars;
         private readonly Rectangle[] _barShapes = new Rectangle[14];
         private readonly double[] _levels = new double[14];
@@ -30,8 +33,8 @@ namespace VoiceVector.Win
             Topmost = true;
             ShowInTaskbar = false;
             ShowActivated = false;
-            Width = 300;
-            Height = 60;
+            Width = 520;
+            Height = 300; // room for the review staging card; unused area is transparent
             ResizeMode = ResizeMode.NoResize;
 
             _bars = new StackPanel
@@ -83,7 +86,7 @@ namespace VoiceVector.Win
             row.Children.Add(_label);
             row.Children.Add(_clock);
 
-            Content = new Border
+            var pill = new Border
             {
                 Background = new SolidColorBrush(Color.FromArgb(235, 32, 30, 42)),
                 BorderBrush = new SolidColorBrush(Color.FromArgb(90, Theme.Accent.R,
@@ -91,7 +94,50 @@ namespace VoiceVector.Win
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(24),
                 Child = row,
+                Width = 300,
+                Height = 60,
+                HorizontalAlignment = HorizontalAlignment.Center,
             };
+
+            _draft = new TextBlock
+            {
+                FontFamily = Theme.UiFont,
+                FontSize = 14,
+                Foreground = new SolidColorBrush(Color.FromRgb(240, 238, 248)),
+                TextWrapping = TextWrapping.Wrap,
+            };
+            _reviewHint = new TextBlock
+            {
+                FontFamily = Theme.UiFont,
+                FontSize = 11.5,
+                Foreground = new SolidColorBrush(Color.FromArgb(190, 240, 238, 248)),
+                Margin = new Thickness(0, 8, 0, 0),
+            };
+            var stagingBody = new StackPanel();
+            stagingBody.Children.Add(new ScrollViewer
+            {
+                Content = _draft,
+                MaxHeight = 170,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            });
+            stagingBody.Children.Add(_reviewHint);
+            _staging = new Border
+            {
+                Background = new SolidColorBrush(Color.FromArgb(240, 32, 30, 42)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(90, Theme.Accent.R,
+                                                                 Theme.Accent.G, Theme.Accent.B)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(14),
+                Padding = new Thickness(14),
+                Margin = new Thickness(0, 0, 0, 10),
+                Child = stagingBody,
+                Visibility = Visibility.Collapsed,
+            };
+
+            var stack = new StackPanel { VerticalAlignment = VerticalAlignment.Bottom };
+            stack.Children.Add(_staging);
+            stack.Children.Add(pill);
+            Content = stack;
 
             SourceInitialized += (s, e) =>
             {
@@ -107,7 +153,24 @@ namespace VoiceVector.Win
 
         public void ShowHud(string label)
         {
+            ShowHud(label, null);
+        }
+
+        public void ShowHud(string label, string draft)
+        {
             _label.Text = label;
+            if (draft != null)
+            {
+                _draft.Text = draft;
+                _reviewHint.Text = (label == "Reviewing"
+                    ? "Press the hotkey and say a change"
+                    : label) + "      Enter: paste   Esc: discard";
+                _staging.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                _staging.Visibility = Visibility.Collapsed;
+            }
             bool recording = label == "Listening…";
             _bars.Visibility = recording ? Visibility.Visible : Visibility.Collapsed;
             _clock.Visibility = recording ? Visibility.Visible : Visibility.Collapsed;

@@ -184,6 +184,38 @@ enum SelfTest {
         expect(custom.hasPrefix("My own prompt."), "cleanup: custom prompt replaces built-in")
         expect(custom.contains("Luna"), "cleanup: vocabulary appended to custom prompt")
 
+        // Review (staged revisions): prompt parity with shared/prompts, message shape, sanitizing
+        let cwd = FileManager.default.currentDirectoryPath
+        let candidates = [cwd, cwd + "/..", cwd + "/../..", cwd + "/../../.."]
+            .map { $0 + "/shared/prompts" }
+        if let dir = candidates.first(where: { FileManager.default.fileExists(atPath: $0 + "/review.txt") }) {
+            let file = (try? String(contentsOfFile: dir + "/review.txt", encoding: .utf8)) ?? ""
+            expect(file.trimmingCharacters(in: .whitespacesAndNewlines)
+                   == CleanupEngine.reviewPrompt.trimmingCharacters(in: .whitespacesAndNewlines),
+                   "review: prompt matches shared/prompts/review.txt")
+            let rich = (try? String(contentsOfFile: dir + "/cleanup-rich.txt", encoding: .utf8)) ?? ""
+            expect(rich.trimmingCharacters(in: .whitespacesAndNewlines)
+                   == CleanupEngine.defaultPrompt(mode: .rich).trimmingCharacters(in: .whitespacesAndNewlines),
+                   "cleanup: rich prompt matches shared/prompts/cleanup-rich.txt")
+        }
+        expect(CleanupEngine.reviewMessage(draft: "Hi", instruction: "shorter")
+               == "<draft>\nHi\n</draft>\n<instruction>\nshorter\n</instruction>",
+               "review: message wraps draft and instruction")
+        expect(CleanupEngine.sanitize("<draft>\nHello\n</draft>", fallback: "x") == "Hello",
+               "review: echoed draft delimiters stripped")
+        var reviewProfile = DictationProfile(name: "Email", hotkey: .default, cleanupMode: .rich)
+        reviewProfile.reviewBeforePaste = true
+        reviewProfile.screenshotContext = true
+        reviewProfile.reviewProviderID = UUID()
+        let reviewRound = try? JSONDecoder().decode(DictationProfile.self,
+                                                    from: JSONEncoder().encode(reviewProfile))
+        expect(reviewRound?.reviewBeforePaste == true && reviewRound?.screenshotContext == true
+               && reviewRound?.reviewProviderID == reviewProfile.reviewProviderID,
+               "review: profile options round trip")
+        let plainProfile = try? JSONDecoder().decode(DictationProfile.self, from: Data("{}".utf8))
+        expect(plainProfile?.reviewBeforePaste == false && plainProfile?.screenshotContext == false,
+               "review: options default off")
+
         // Dictation profiles: legacy migration + policy resolution
         do {
             let legacy = Data(#"{"hotkey":{"keyCode":63,"modifiers":0,"isModifierOnly":true}}"#.utf8)

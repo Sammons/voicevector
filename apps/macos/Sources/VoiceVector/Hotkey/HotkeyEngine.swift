@@ -26,6 +26,11 @@ final class HotkeyEngine {
 
     /// True while a dictation gesture is in progress (used to swallow Esc).
     var recordingActive = false
+    /// True while a draft is staged for review: ⏎ accepts, Esc discards
+    /// (both swallowed so they never reach the app underneath).
+    var reviewActive = false
+    var onReviewAccept: (() -> Void)?
+    var onReviewDiscard: (() -> Void)?
 
     init(profiles: [DictationProfile], startMode: TapStartMode) {
         self.profiles = HotkeyEngine.dedupe(profiles)
@@ -110,6 +115,19 @@ final class HotkeyEngine {
         if recordingActive, type == .keyDown, keyCode == UInt16(kVK_Escape) {
             emit(machine.cancel())
             return nil
+        }
+
+        // Staged review: ⏎ pastes, Esc discards; both swallowed (and their
+        // key-ups), everything else passes through.
+        if reviewActive, !recordingActive, !machine.isActive {
+            if keyCode == UInt16(kVK_Return) || keyCode == UInt16(kVK_ANSI_KeypadEnter) {
+                if type == .keyDown { DispatchQueue.main.async { self.onReviewAccept?() } }
+                return nil
+            }
+            if keyCode == UInt16(kVK_Escape) {
+                if type == .keyDown { DispatchQueue.main.async { self.onReviewDiscard?() } }
+                return nil
+            }
         }
 
         // Try each profile's hotkey; a gesture in progress only accepts

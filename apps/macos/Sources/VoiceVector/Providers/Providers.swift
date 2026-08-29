@@ -120,16 +120,30 @@ struct ProviderClient {
 
     // MARK: Chat (cleanup)
 
-    func chat(system: String, user: String, temperature: Double = 0.2) async throws -> String {
+    /// `image` (JPEG) is sent as an OpenAI image_url content part alongside
+    /// the text; models without vision reject it, so callers retry without.
+    func chat(system: String, user: String, image: Data? = nil,
+              temperature: Double = 0.2) async throws -> String {
         guard profile.kind.supportsChat else {
             throw HTTPError.badResponse("\(profile.kind.displayName) has no chat endpoint")
         }
         let url = try HTTP.url(base: profile.baseURL, path: "/chat/completions")
+        let userContent: Any
+        if let image {
+            userContent = [
+                ["type": "text", "text": user],
+                ["type": "image_url",
+                 "image_url": ["url": "data:image/jpeg;base64," + image.base64EncodedString(),
+                               "detail": "low"]],
+            ]
+        } else {
+            userContent = user
+        }
         let payload: [String: Any] = [
             "model": profile.chatModel,
             "messages": [
                 ["role": "system", "content": system],
-                ["role": "user", "content": user],
+                ["role": "user", "content": userContent],
             ],
             "temperature": temperature,
         ]
@@ -147,19 +161,26 @@ struct ProviderClient {
 
     /// One-shot audio → text via an audio-capable chat model (OpenAI
     /// `input_audio` content part). Used for single-pass dictation.
-    func chatWithAudio(system: String, audio: Data, temperature: Double = 0.2) async throws -> String {
+    func chatWithAudio(system: String, audio: Data, image: Data? = nil,
+                       temperature: Double = 0.2) async throws -> String {
         guard profile.kind.supportsChat else {
             throw HTTPError.badResponse("\(profile.kind.displayName) has no chat endpoint")
         }
         let url = try HTTP.url(base: profile.baseURL, path: "/chat/completions")
+        var parts: [[String: Any]] = [
+            ["type": "input_audio",
+             "input_audio": ["data": audio.base64EncodedString(), "format": "wav"]],
+        ]
+        if let image {
+            parts.append(["type": "image_url",
+                          "image_url": ["url": "data:image/jpeg;base64," + image.base64EncodedString(),
+                                        "detail": "low"]])
+        }
         let payload: [String: Any] = [
             "model": profile.chatModel,
             "messages": [
                 ["role": "system", "content": system],
-                ["role": "user", "content": [
-                    ["type": "input_audio",
-                     "input_audio": ["data": audio.base64EncodedString(), "format": "wav"]],
-                ]],
+                ["role": "user", "content": parts],
             ],
             "temperature": temperature,
         ]

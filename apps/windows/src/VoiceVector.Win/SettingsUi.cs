@@ -418,6 +418,73 @@ namespace VoiceVector.Win
             };
             row.Children.Add(sttBox);
 
+            var reviewRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(22, 6, 0, 0) };
+            var reviewToggle = new CheckBox
+            {
+                Content = Theme.Text("Review before pasting", 12),
+                IsChecked = profile.ReviewBeforePaste,
+            };
+            var screenshotToggle = new CheckBox
+            {
+                Content = Theme.Text("Screenshot context", 12),
+                IsChecked = profile.ScreenshotContext,
+                Margin = new Thickness(14, 0, 0, 0),
+            };
+            reviewRow.Children.Add(reviewToggle);
+            reviewRow.Children.Add(screenshotToggle);
+            row.Children.Add(reviewRow);
+
+            var reviewBox = new ComboBox { MinWidth = 220, Margin = new Thickness(22, 4, 0, 0),
+                                           HorizontalAlignment = HorizontalAlignment.Left };
+            reviewBox.Items.Add("Review model: same as cleanup");
+            var reviewProviders = config.Providers
+                .Where(p => p.Kind.SupportsChat() && p.ChatModel.Length > 0).ToList();
+            foreach (var p in reviewProviders) reviewBox.Items.Add(p.Name + " — " + p.ChatModel);
+            int reviewIndex = profile.ReviewProviderId.HasValue
+                ? reviewProviders.FindIndex(p => p.Id == profile.ReviewProviderId.Value) : -1;
+            reviewBox.SelectedIndex = reviewIndex < 0 ? 0 : reviewIndex + 1;
+            reviewBox.SelectionChanged += (s, e) =>
+            {
+                profile.ReviewProviderId = reviewBox.SelectedIndex <= 0
+                    ? (Guid?)null : reviewProviders[reviewBox.SelectedIndex - 1].Id;
+                config.Save();
+            };
+            var reviewHint = Theme.Text(
+                "The cleaned text is staged above the recording pill instead of pasted. Press the hotkey "
+                + "and say a change as many times as you like; Enter pastes, Esc discards.",
+                11.5, secondary: true);
+            reviewHint.TextWrapping = TextWrapping.Wrap;
+            reviewHint.Margin = new Thickness(22, 2, 0, 0);
+            var screenshotHint = Theme.Text(
+                "A screenshot of the foreground window is attached to cleanup and review calls so the "
+                + "model knows what you're looking at. Models without vision ignore it.",
+                11.5, secondary: true);
+            screenshotHint.TextWrapping = TextWrapping.Wrap;
+            screenshotHint.Margin = new Thickness(22, 2, 0, 0);
+            row.Children.Add(reviewBox);
+            row.Children.Add(reviewHint);
+            row.Children.Add(screenshotHint);
+            Action syncReview = () =>
+            {
+                var review = reviewToggle.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+                reviewBox.Visibility = reviewHint.Visibility = review;
+                screenshotHint.Visibility = screenshotToggle.IsChecked == true
+                    ? Visibility.Visible : Visibility.Collapsed;
+            };
+            reviewToggle.Click += (s, e) =>
+            {
+                profile.ReviewBeforePaste = reviewToggle.IsChecked == true;
+                config.Save();
+                syncReview();
+            };
+            screenshotToggle.Click += (s, e) =>
+            {
+                profile.ScreenshotContext = screenshotToggle.IsChecked == true;
+                config.Save();
+                syncReview();
+            };
+            syncReview();
+
             var vocabLabel = Theme.Text("Extra vocabulary for this hotkey (added to the shared list; used by the transcriber when supported)",
                                         11.5, secondary: true);
             vocabLabel.Margin = new Thickness(22, 4, 0, 0);

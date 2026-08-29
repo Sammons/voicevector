@@ -10,6 +10,9 @@ final class DictationController: ObservableObject {
         case idle
         case recording
         case processing(String)     // "Transcribing…" / "Cleaning up…"
+        /// A draft is staged in the HUD: the hotkey records a spoken change,
+        /// ⏎ pastes, Esc discards.
+        case reviewing
         case failed(String)
 
         var isBusy: Bool {
@@ -20,7 +23,25 @@ final class DictationController: ObservableObject {
         }
     }
 
+    /// A staged dictation awaiting spoken revisions / ⏎ / Esc.
+    struct ReviewSession {
+        var entry: Entry
+        var slot: (id: String, audioURL: URL, folder: String)
+        var config: AppConfig
+        var profile: DictationProfile?
+        var policy: CleanupEngine.EffectiveCleanup
+        var screenshot: Data?
+        var revisions = 0
+    }
+
     @Published private(set) var state: State = .idle
+    /// Text shown in the HUD staging area while a review session is active
+    /// (kept through command recordings and revisions).
+    @Published private(set) var reviewDraft: String?
+    private var review: ReviewSession?
+    private var commandSlot: URL?
+    /// Screenshot taken when the hotkey fired, for cleanup/review context.
+    private var pendingScreenshot: Data?
     /// Bumped whenever an entry is added/updated so list views reload.
     @Published private(set) var libraryGeneration = 0
     /// Mic level passthrough for the HUD.
@@ -75,6 +96,7 @@ final class DictationController: ObservableObject {
 
     func startRecording(profileID: UUID? = nil) {
         guard !state.isBusy else { return }
+        if state == .reviewing { startCommandRecording(); return }
         activeProfileID = profileID ?? configStore.config.dictationProfiles.first?.id
         guard Recorder.permissionGranted else {
             state = .failed("Microphone permission is not granted — open Settings to fix.")
@@ -84,6 +106,13 @@ final class DictationController: ObservableObject {
         let folder = configStore.config.activeFolder
         let slot = library.newEntrySlot(folder: folder)
         currentSlot = (slot.id, slot.audioURL, folder)
+
+        // Screenshot of what the user is looking at, before anything moves.
+        pendingScreenshot = nil
+        if let profile = configStore.config.dictationProfiles.first(where: { $0.id == activeProfileID }),
+           profile.screenshotContext {
+            pendingScreenshot = ScreenCapture.frontmostWindowJPEG()
+        }
 
         // Arm silence-gap streaming: completed phrases transcribe in the
         // background during pauses; cleanup still runs once at the end.
@@ -137,6 +166,7 @@ final class DictationController: ObservableObject {
     }
 
     func finishRecording() {
+        if review != nil, commandSlot != nil { finishCommandRecording(); return }
         guard state == .recording, let slot = currentSlot else { return }
         let duration = recorder.stop()
         let tailStartByte = recorder.tailStartByte
@@ -161,6 +191,122 @@ final class DictationController: ObservableObject {
         guard state == .recording else { return }
         recorder.discard()
         currentSlot = nil
+        if review != nil, commandSlot != nil {
+            commandSlot = nil
+            state = .reviewing
+        } else {
+            state = .idle
+        }
+    }
+
+    // MARK: Review session (staged draft, spoken revisions)
+
+    private func beginReview(entry: Entry, slot: (id: String, audioURL: URL, folder: String),
+                             config: AppConfig, profile: DictationProfile?,
+                             policy: CleanupEngine.EffectiveCleanup) {
+        review = ReviewSession(entry: entry, slot: slot, config: config, profile: profile,
+                               policy: policy, screenshot: pendingScreenshot)
+        reviewDraft = entry.cleaned
+        state = .reviewing
+    }
+
+    /// The reviewer model: the profile's choice, else the cleanup provider.
+    private func reviewProvider(for session: ReviewSession) -> ProviderProfile? {
+        if let id = session.profile?.reviewProviderID,
+           let p = session.config.providers.first(where: { $0.id == id }) { return p }
+        if let p = session.policy.provider, p.kind.supportsChat, !p.chatModel.isEmpty { return p }
+        return session.config.providers.first { $0.kind.supportsChat && !$0.chatModel.isEmpty }
+    }
+
+    private func startCommandRecording() {
+        guard review != nil, state == .reviewing else { return }
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vv-command-\(UUID().uuidString).wav")
+        commandSlot = url
+        recorder.chunking = false
+        recorder.onSegment = nil
+        state = .recording
+        recorder.start(to: url) { [weak self] error in
+            guard let self else { return }
+            if let error {
+                self.commandSlot = nil
+                self.state = .reviewing
+                self.notify(title: "Could not record the change", body: error.localizedDescription)
+                Chime.shared.playError()
+            } else if self.state == .recording, self.configStore.config.playSounds {
+                Chime.shared.playStart()
+            }
+        }
+    }
+
+    private func finishCommandRecording() {
+        guard let session = review, let url = commandSlot else { return }
+        let duration = recorder.stop()
+        commandSlot = nil
+        if configStore.config.playSounds { Chime.shared.playStop() }
+        guard duration >= 0.5 else {
+            try? FileManager.default.removeItem(at: url)
+            state = .reviewing
+            return
+        }
+        state = .processing("Hearing the change…")
+        Task { await self.applyCommand(audioURL: url, session: session) }
+    }
+
+    private func applyCommand(audioURL: URL, session: ReviewSession) async {
+        defer { try? FileManager.default.removeItem(at: audioURL) }
+        guard let stt = session.policy.stt else {
+            state = .reviewing
+            notify(title: "No transcription provider", body: "Pick one in Settings → Dictation.")
+            return
+        }
+        guard let reviewer = reviewProvider(for: session) else {
+            state = .reviewing
+            notify(title: "No review model", body: "Pick a cleanup or review model for this hotkey.")
+            return
+        }
+        do {
+            let vocabulary = CleanupEngine.parseVocabulary(session.policy.config.vocabulary)
+            let instruction = try await ProviderClient(profile: stt)
+                .transcribe(audioURL: audioURL, vocabulary: vocabulary).text
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !instruction.isEmpty, let draft = reviewDraft else { state = .reviewing; return }
+            state = .processing("Revising…")
+            let revised = try await CleanupEngine.revise(draft: draft, instruction: instruction,
+                                                         vocabulary: session.policy.config.vocabulary,
+                                                         profile: reviewer, image: session.screenshot)
+            reviewDraft = revised
+            review?.revisions += 1
+            review?.entry.cleanupLabel = session.entry.cleanupLabel
+                + " · review \(reviewer.name)/\(reviewer.chatModel) ×\(session.revisions + 1)"
+        } catch {
+            notify(title: "Revision failed", body: error.localizedDescription)
+            Chime.shared.playError()
+        }
+        state = .reviewing
+    }
+
+    /// ⏎ while reviewing: save the draft and paste it.
+    func acceptReview() {
+        guard state == .reviewing, var session = review, let draft = reviewDraft else { return }
+        review = nil
+        reviewDraft = nil
+        session.entry.cleaned = draft
+        library.save(session.entry)
+        libraryGeneration += 1
+        Task { await self.deliver(entry: session.entry, slot: session.slot, config: session.config) }
+    }
+
+    /// Esc while reviewing: keep the entry (with the draft) but don't paste.
+    func discardReview() {
+        guard state == .reviewing, var session = review else { return }
+        review = nil
+        let draft = reviewDraft
+        reviewDraft = nil
+        if let draft { session.entry.cleaned = draft }
+        session.entry.status = "complete (not pasted)"
+        library.save(session.entry)
+        libraryGeneration += 1
         state = .idle
     }
 
@@ -270,7 +416,8 @@ final class DictationController: ObservableObject {
                 entry.cleanupLabel = "\(cleanupProfile.name)/\(cleanupProfile.chatModel)"
                 do {
                     entry.cleaned = try await CleanupEngine.cleanup(raw: entry.raw, config: policy.config,
-                                                                    profile: cleanupProfile)
+                                                                    profile: cleanupProfile,
+                                                                    image: pendingScreenshot)
                 } catch {
                     entry.cleanupLabel += " (failed — raw used)"
                     Log.error("Cleanup failed, using raw transcript: \(error.localizedDescription)")
@@ -288,7 +435,17 @@ final class DictationController: ObservableObject {
         library.save(entry)
         libraryGeneration += 1
 
-        // 3. Paste into the frontmost app.
+        // Staged review: hold the draft in the HUD until ⏎ / Esc.
+        if let dictationProfile, dictationProfile.reviewBeforePaste, profileID != nil {
+            beginReview(entry: entry, slot: slot, config: config, profile: dictationProfile, policy: policy)
+            return
+        }
+        await deliver(entry: entry, slot: slot, config: config)
+    }
+
+    /// 3. Paste into the frontmost app, then 4. webhook (fire and forget).
+    private func deliver(entry: Entry, slot: (id: String, audioURL: URL, folder: String),
+                         config: AppConfig) async {
         state = .processing("Pasting…")
         let outcome = await paste.insert(entry.cleaned, autoPaste: config.autoPaste,
                                          preferAppleScript: config.appleScriptPaste)
@@ -300,7 +457,6 @@ final class DictationController: ObservableObject {
             finish(with: .idle)
         }
 
-        // 4. Webhook (fire and forget).
         if let webhook = config.folderWebhooks[slot.folder], webhook.enabled {
             let finished = entry
             let audioURL = slot.audioURL

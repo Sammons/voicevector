@@ -4,6 +4,21 @@ All notable changes to VoiceVector. Each release's entry doubles as its
 GitHub release notes. Versions follow [semantic versioning](https://semver.org);
 both the macOS and Windows apps share one version number.
 
+## Unreleased
+
+- **Review before pasting** (per hotkey). The cleaned text is staged in a
+  card above the recording pill instead of being pasted. Press the hotkey and
+  say a change — "make it shorter", "turn that into a list", "sign it Ben" —
+  as many times as you like; a review model (the cleanup model by default, or
+  one you pick) rewrites the draft each time. ⏎ pastes, Esc discards. Neither
+  key reaches the app underneath while a draft is staged.
+- **Screenshot context** (per hotkey). A screenshot of the frontmost window is
+  captured when the hotkey fires and attached to the cleanup call and every
+  revision, so the model knows what you're looking at. macOS asks for Screen
+  Recording once; models without vision fall back to text automatically.
+- Reviewer prompt lives in `shared/prompts/review.txt`, embedded and
+  self-test-checked in both apps like the cleanup prompts.
+
 ## v0.3.2 — 2026-08-29
 
 Recording feel, especially with external audio interfaces.

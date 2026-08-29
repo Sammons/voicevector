@@ -167,6 +167,14 @@ namespace VoiceVector.Shared
         public Guid? SttProviderId;
         /// <summary>Extra vocabulary for this hotkey, appended to the global list.</summary>
         public string Vocabulary = "";
+        /// <summary>Stage the cleaned text in the HUD instead of pasting: speak
+        /// changes, Enter pastes, Esc discards.</summary>
+        public bool ReviewBeforePaste = false;
+        /// <summary>null = use the cleanup provider for revisions.</summary>
+        public Guid? ReviewProviderId;
+        /// <summary>Attach a screenshot of the foreground window to cleanup and
+        /// review calls as context.</summary>
+        public bool ScreenshotContext = false;
 
         public Dictionary<string, object> ToJson()
         {
@@ -190,6 +198,10 @@ namespace VoiceVector.Shared
                 { "sttProviderID", SttProviderId.HasValue
                     ? SttProviderId.Value.ToString("D") : (object)null },
                 { "vocabulary", Vocabulary },
+                { "reviewBeforePaste", ReviewBeforePaste },
+                { "reviewProviderID", ReviewProviderId.HasValue
+                    ? ReviewProviderId.Value.ToString("D") : (object)null },
+                { "screenshotContext", ScreenshotContext },
             };
         }
 
@@ -216,6 +228,10 @@ namespace VoiceVector.Shared
             Guid sp;
             if (Guid.TryParse(Json.Str(d, "sttProviderID"), out sp)) profile.SttProviderId = sp;
             profile.Vocabulary = Json.Str(d, "vocabulary");
+            profile.ReviewBeforePaste = Json.Bool(d, "reviewBeforePaste", false);
+            Guid rp;
+            if (Guid.TryParse(Json.Str(d, "reviewProviderID"), out rp)) profile.ReviewProviderId = rp;
+            profile.ScreenshotContext = Json.Bool(d, "screenshotContext", false);
             return profile;
         }
     }

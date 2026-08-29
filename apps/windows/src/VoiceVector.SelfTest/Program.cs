@@ -311,6 +311,22 @@ namespace VoiceVector.SelfTest
             Expect(CleanupEngine.PostProcess("  ", "raw") == "raw", "cleanup: empty reply keeps raw");
             Expect(CleanupEngine.WrapTranscript("x") == "<transcript>\nx\n</transcript>",
                    "cleanup: transcript wrapping");
+            Expect(CleanupEngine.ReviewMessage("Hi", "shorter")
+                   == "<draft>\nHi\n</draft>\n<instruction>\nshorter\n</instruction>",
+                   "review: message wraps draft and instruction");
+            Expect(CleanupEngine.PostProcess("<draft>\nHello\n</draft>", "x") == "Hello",
+                   "review: echoed draft delimiters stripped");
+            var reviewProfile = new DictationProfile
+            {
+                ReviewBeforePaste = true, ScreenshotContext = true, ReviewProviderId = Guid.NewGuid(),
+            };
+            var reviewRound = DictationProfile.FromJson(reviewProfile.ToJson());
+            Expect(reviewRound.ReviewBeforePaste && reviewRound.ScreenshotContext
+                   && reviewRound.ReviewProviderId == reviewProfile.ReviewProviderId,
+                   "review: profile options round trip");
+            var plainProfile = DictationProfile.FromJson(new Dictionary<string, object>());
+            Expect(!plainProfile.ReviewBeforePaste && !plainProfile.ScreenshotContext,
+                   "review: options default off");
 
             var prompts = FindSharedPrompts();
             if (prompts != null)
@@ -321,6 +337,9 @@ namespace VoiceVector.SelfTest
                 Expect(File.ReadAllText(Path.Combine(prompts, "cleanup-light.txt")).Trim()
                        == CleanupEngine.DefaultPrompt(CleanupMode.Light).Trim(),
                        "cleanup: light prompt matches shared/prompts");
+                Expect(File.ReadAllText(Path.Combine(prompts, "review.txt")).Trim()
+                       == CleanupEngine.ReviewPrompt.Trim(),
+                       "review: prompt matches shared/prompts");
             }
 
             var sp = ProviderProfile.Preset(ProviderKind.VercelGateway);

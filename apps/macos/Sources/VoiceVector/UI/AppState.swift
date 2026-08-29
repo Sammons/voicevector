@@ -15,6 +15,7 @@ final class AppState: ObservableObject {
     @Published var showSettings = false
     @Published var accessibilityGranted = AXIsProcessTrusted()
     @Published var microphoneGranted = Recorder.permissionGranted
+    @Published var screenRecordingGranted = ScreenCapture.permissionGranted
 
     init() {
         let store = ConfigStore()
@@ -51,6 +52,7 @@ final class AppState: ObservableObject {
     func refreshPermissions() {
         accessibilityGranted = AXIsProcessTrusted()
         microphoneGranted = Recorder.permissionGranted
+        screenRecordingGranted = ScreenCapture.permissionGranted
         if accessibilityGranted, !hotkey.isRunning {
             hotkey.start()
         }

@@ -71,3 +71,18 @@ vocabulary suffix; user message = raw transcript wrapped in
 `<transcript>…</transcript>` delimiters (data, not conversation);
 temperature 0.2; strip wrapping code fences / echoed delimiters /
 whitespace from the reply; empty reply ⇒ keep raw.
+
+## Review (spoken revisions of a staged draft)
+
+With a hotkey's **Review before pasting** on, the cleaned text is held in the
+HUD and each spoken instruction is sent to the review model as one chat call:
+system = `shared/prompts/review.txt` (+ vocabulary line), user =
+`<draft>…</draft>\n<instruction>…</instruction>`. The reply replaces the draft
+after the same sanitizing as cleanup (code fences and echoed delimiters
+stripped; empty ⇒ unchanged). The review model defaults to the cleanup
+provider and can be any chat-capable provider.
+
+**Screenshot context** attaches a JPEG of the frontmost window as an OpenAI
+`image_url` content part (`detail: low`) to the cleanup call and every
+revision, with a one-line note appended to the system prompt. If the model
+rejects image input the call is retried text-only.

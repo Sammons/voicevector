@@ -13,6 +13,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         state = AppState()
         hud = RecordingHUD(dictation: state.dictation)
+        state.hotkey.onReviewAccept = { [weak self] in self?.state.dictation.acceptReview() }
+        state.hotkey.onReviewDiscard = { [weak self] in self?.state.dictation.discardReview() }
 
         setUpMenu()
         setUpStatusItem()
@@ -101,12 +103,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .sink { [weak self] dictationState in
                 guard let self else { return }
                 switch dictationState {
-                case .recording, .processing:
+                case .recording, .processing, .reviewing:
                     self.hud.show()
                 default:
                     self.hud.hide()
                 }
                 self.state.hotkey.recordingActive = (dictationState == .recording)
+                self.state.hotkey.reviewActive = (dictationState == .reviewing)
                 self.updateStatusIcon(for: dictationState)
             }
             .store(in: &cancellables)

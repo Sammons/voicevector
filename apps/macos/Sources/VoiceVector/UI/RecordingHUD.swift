@@ -14,7 +14,9 @@ final class RecordingHUD {
 
     func show() {
         if panel == nil {
-            let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 240, height: 56),
+            // Tall enough for the review staging card above the pill; the
+            // view is bottom-aligned and the rest stays transparent.
+            let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 520, height: 300),
                                 styleMask: [.nonactivatingPanel, .fullSizeContentView, .borderless],
                                 backing: .buffered, defer: false)
             panel.level = .statusBar
@@ -60,6 +62,64 @@ struct HUDView: View {
     private let timer = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
 
     var body: some View {
+        VStack(spacing: 10) {
+            if let draft = dictation.reviewDraft {
+                stagingCard(draft)
+            }
+            pill
+        }
+        .frame(width: 520, height: 300, alignment: .bottom)
+        .onReceive(timer) { _ in
+            tick += 1
+            guard dictation.state == .recording else { return }
+            var next = Array(bars.dropFirst())
+            next.append(max(0.12, CGFloat(dictation.level)))
+            bars = next
+        }
+    }
+
+    private func stagingCard(_ draft: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ScrollView {
+                Text(draft)
+                    .font(.system(.body, design: .rounded))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: 170)
+            HStack(spacing: 14) {
+                Label(reviewHint, systemImage: reviewHintIcon)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(dictation.state == .reviewing ? Color.secondary : Theme.accent)
+                Spacer()
+                Text("⏎ paste   esc discard")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(14)
+        .frame(width: 520)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.accent.opacity(0.35), lineWidth: 1))
+    }
+
+    private var reviewHint: String {
+        switch dictation.state {
+        case .recording: return "Listening for a change…"
+        case .processing(let step): return step
+        default: return "Press the hotkey and say a change"
+        }
+    }
+
+    private var reviewHintIcon: String {
+        switch dictation.state {
+        case .recording: return "mic.fill"
+        case .processing: return "sparkles"
+        default: return "text.bubble"
+        }
+    }
+
+    private var pill: some View {
         HStack(spacing: 12) {
             switch dictation.state {
             case .recording:
@@ -75,6 +135,11 @@ struct HUDView: View {
                 ProgressView().controlSize(.small)
                 Text(step)
                     .font(.system(.callout, design: .rounded).weight(.medium))
+            case .reviewing:
+                Image(systemName: "doc.text")
+                    .foregroundStyle(Theme.accent)
+                Text("Reviewing")
+                    .font(.system(.callout, design: .rounded).weight(.medium))
             default:
                 EmptyView()
             }
@@ -83,13 +148,6 @@ struct HUDView: View {
         .padding(.vertical, 12)
         .background(.ultraThinMaterial, in: Capsule())
         .overlay(Capsule().stroke(Theme.accent.opacity(0.35), lineWidth: 1))
-        .onReceive(timer) { _ in
-            tick += 1
-            guard dictation.state == .recording else { return }
-            var next = Array(bars.dropFirst())
-            next.append(max(0.12, CGFloat(dictation.level)))
-            bars = next
-        }
         .frame(width: 240, height: 56)
     }
 

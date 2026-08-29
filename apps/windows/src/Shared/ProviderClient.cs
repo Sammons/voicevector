@@ -153,21 +153,50 @@ namespace VoiceVector.Shared
 
         // -- chat (cleanup) ----------------------------------------------------
 
-        public async Task<string> ChatAsync(string system, string user, double temperature = 0.2)
+        public Task<string> ChatAsync(string system, string user, double temperature = 0.2)
+        {
+            return ChatAsync(system, user, null, temperature);
+        }
+
+        /// <summary>`image` (JPEG) rides along as an OpenAI image_url content
+        /// part; models without vision reject it, so callers retry without.</summary>
+        public async Task<string> ChatAsync(string system, string user, byte[] image, double temperature = 0.2)
         {
             if (!_profile.Kind.SupportsChat())
                 throw new InvalidOperationException(_profile.Kind.DisplayName() + " has no chat endpoint");
+            object userContent = user;
+            if (image != null)
+            {
+                userContent = new List<object>
+                {
+                    new Dictionary<string, object> { { "type", "text" }, { "text", user } },
+                    ImagePart(image),
+                };
+            }
             var payload = new Dictionary<string, object>
             {
                 { "model", _profile.ChatModel },
                 { "messages", new List<object>
                     {
                         new Dictionary<string, object> { { "role", "system" }, { "content", system } },
-                        new Dictionary<string, object> { { "role", "user" }, { "content", user } },
+                        new Dictionary<string, object> { { "role", "user" }, { "content", userContent } },
                     } },
                 { "temperature", temperature },
             };
             return await ChatPayloadAsync(payload).ConfigureAwait(false);
+        }
+
+        private static Dictionary<string, object> ImagePart(byte[] jpeg)
+        {
+            return new Dictionary<string, object>
+            {
+                { "type", "image_url" },
+                { "image_url", new Dictionary<string, object>
+                    {
+                        { "url", "data:image/jpeg;base64," + Convert.ToBase64String(jpeg) },
+                        { "detail", "low" },
+                    } },
+            };
         }
 
         /// <summary>One-shot audio → text (OpenAI input_audio content part).</summary>

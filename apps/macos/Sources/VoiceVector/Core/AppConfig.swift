@@ -114,10 +114,18 @@ struct DictationProfile: Codable, Equatable, Identifiable {
     var sttProviderID: UUID?
     /// Extra vocabulary for this hotkey, appended to the global list.
     var vocabulary: String = ""
+    /// Stage the cleaned text in the HUD instead of pasting: speak changes
+    /// (revised by the review model), ⏎ pastes, Esc discards.
+    var reviewBeforePaste: Bool = false
+    /// nil = use the cleanup provider for revisions.
+    var reviewProviderID: UUID?
+    /// Attach a screenshot of the frontmost window to cleanup and review
+    /// calls as context. Needs Screen Recording permission.
+    var screenshotContext: Bool = false
 
     enum CodingKeys: String, CodingKey {
         case id, name, hotkey, cleanupEnabled, cleanupMode, cleanupProviderID, customPrompt
-        case sttProviderID, vocabulary
+        case sttProviderID, vocabulary, reviewBeforePaste, reviewProviderID, screenshotContext
     }
 
     init() {}
@@ -140,6 +148,9 @@ struct DictationProfile: Codable, Equatable, Identifiable {
         customPrompt = try c.decodeIfPresent(String.self, forKey: .customPrompt) ?? ""
         sttProviderID = try c.decodeIfPresent(UUID.self, forKey: .sttProviderID)
         vocabulary = try c.decodeIfPresent(String.self, forKey: .vocabulary) ?? ""
+        reviewBeforePaste = try c.decodeIfPresent(Bool.self, forKey: .reviewBeforePaste) ?? false
+        reviewProviderID = try c.decodeIfPresent(UUID.self, forKey: .reviewProviderID)
+        screenshotContext = try c.decodeIfPresent(Bool.self, forKey: .screenshotContext) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -153,6 +164,9 @@ struct DictationProfile: Codable, Equatable, Identifiable {
         try c.encode(customPrompt, forKey: .customPrompt)
         try c.encodeIfPresent(sttProviderID, forKey: .sttProviderID)
         try c.encode(vocabulary, forKey: .vocabulary)
+        try c.encode(reviewBeforePaste, forKey: .reviewBeforePaste)
+        try c.encodeIfPresent(reviewProviderID, forKey: .reviewProviderID)
+        try c.encode(screenshotContext, forKey: .screenshotContext)
     }
 }
 
