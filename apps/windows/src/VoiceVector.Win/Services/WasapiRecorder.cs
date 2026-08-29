@@ -37,12 +37,12 @@ namespace VoiceVector.Win.Services
         private const float VoiceRmsFloor = 0.001f;
         private float _noiseFloor = 0.001f;
         /// <summary>HUD level on a fixed, quantized scale (mirrors macOS):
-        /// −60 dBFS is silence, −15 dBFS is full, crushed to 5 steps.</summary>
+        /// −60 dBFS is silence, −15 dBFS is full, crushed to 3 steps.</summary>
         public static float DisplayLevel(float rms)
         {
             var db = 20 * Math.Log10(Math.Max(rms, 1e-6));
             var normalized = Math.Min(1, Math.Max(0, (db + 60) / 45));
-            return (float)(Math.Ceiling(normalized * 5) / 5);
+            return (float)(Math.Ceiling(normalized * 3) / 3);
         }
 
         private float Meter(float rms) { return DisplayLevel(rms); }

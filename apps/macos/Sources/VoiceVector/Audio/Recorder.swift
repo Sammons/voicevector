@@ -28,13 +28,13 @@ final class Recorder {
     private let voiceRMSFloor: Float = 0.001
     private var noiseFloor: Float = 0.001
     /// HUD level on a fixed, quantized scale — deliberately simple: −60 dBFS
-    /// is silence, −15 dBFS is full, crushed to 5 steps. A conservatively
-    /// gained interface shows a bar or two, a hot built-in mic four or five,
+    /// is silence, −15 dBFS is full, crushed to 3 steps. A conservatively
+    /// gained interface sits at the first or second step, a hot built-in mic at the top,
     /// and room noise on either reads as flat.
     static func displayLevel(rms: Float) -> Float {
         let db = 20 * log10(max(rms, 1e-6))
         let normalized = min(1, max(0, (db + 60) / 45))
-        return (normalized * 5).rounded(.up) / 5
+        return (normalized * 3).rounded(.up) / 3
     }
 
     private func meter(_ rms: Float) -> Float { Self.displayLevel(rms: rms) }
