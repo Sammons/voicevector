@@ -12,6 +12,8 @@ all three apps share one version number.
   macOS and Windows that window is outlined in red in its screenshot. Linux
   crops the portal's desktop capture per monitor; Wayland hides the focused
   window, so with several displays the caption says the active one is unknown.
+- **Fix (macOS):** the app crashed at launch when "Keep the microphone always
+  warm" was on.
 
 ## v0.4.0 — 2026-08-30
 
