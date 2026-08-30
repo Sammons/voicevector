@@ -9,6 +9,7 @@ const char *vv_cleanup_default_prompt(VvCleanupMode mode);
 const char *vv_review_prompt(void);
 const char *vv_router_prompt(void);
 const char *vv_screenshot_note(void);
+const char *vv_routing_prefix_note(void);
 
 /* One display's capture plus the caption sent as a text part before it. */
 typedef struct { GBytes *jpeg; char *caption; } VvScreenshot;
@@ -37,7 +38,7 @@ typedef struct { char *name; bool current; char *windows; } VvRouterMachine;
 VvRouterMachine *vv_router_machine_new(const char *name, bool current, const char *windows);
 void vv_router_machine_free(VvRouterMachine *m);
 /* The router's user message: the draft plus each machine's window list. */
-char *vv_router_message(const char *draft, GPtrArray *machines /* VvRouterMachine* */);
+char *vv_router_message(const char *draft, const char *spoken, GPtrArray *machines /* VvRouterMachine* */);
 /* Extracts {machine, window} from a router reply; false when unparseable. */
 bool vv_router_parse(const char *reply, char **machine_out, guint32 *window_out);
 /* Corrective steer appended when the router's last answer was unparseable or

@@ -299,7 +299,7 @@ namespace VoiceVector.Win.Services
                 }
             }
             if (_review != session) return;   // review ended while gathering
-            var message = CleanupEngine.RouterMessage(draft,
+            var message = CleanupEngine.RouterMessage(draft, session.Entry.Raw,
                 contexts.Select(c => Tuple.Create(c.Machine, c.IsLocal, c.WindowLines)).ToList());
             var images = contexts.SelectMany(c => c.Screens).ToList();
             var catalog = contexts.ToDictionary(c => c.Machine,
@@ -521,8 +521,15 @@ namespace VoiceVector.Win.Services
             else
             {
                 SetState(StateKind.Processing, "Pasting…");
-                if (!WindowInventory.Activate(target.Window))
-                    Log.Error("Routed window is gone; pasting into the focused window.");
+                // Only paste once the target is genuinely frontmost, or the text
+                // would land in whatever the user had focused.
+                if (target.Window != 0 && !WindowInventory.Activate(target.Window))
+                {
+                    PasteService.CopyOnly(session.Entry.Cleaned);
+                    RaiseNotice("Couldn't focus " + target.Label + " — text copied; click it and press Ctrl+V.");
+                    SetState(StateKind.Idle, "");
+                    return;
+                }
                 await Task.Delay(350).ConfigureAwait(false);
                 await DeliverAsync(session.Entry, session.AudioPath, session.Folder, session.Config)
                     .ConfigureAwait(false);
@@ -740,6 +747,8 @@ namespace VoiceVector.Win.Services
                             var client = new ProviderClient(cleanupProfile,
                                                             KeyStore.GetApiKey(cleanupProfile.Id));
                             var system = CleanupEngine.SystemPrompt(policy.Config);
+                            if (dictationProfile != null && dictationProfile.RouterEnabled)
+                                system += "\n" + CleanupEngine.RoutingPrefixNote;
                             var user = CleanupEngine.WrapTranscript(entry.Raw);
                             string reply;
                             if (_pendingScreenshots != null)

@@ -24,6 +24,9 @@ namespace VoiceVector.Win.Services
             { 2 /*CF_BITMAP*/, 3 /*CF_METAFILEPICT*/, 14 /*CF_ENHMETAFILE*/,
               0x0082, 0x008E, 0x0080 /*owner display*/ };
 
+        /// <summary>Puts text on the clipboard without pasting.</summary>
+        public static void CopyOnly(string text) { WritePlainText((text ?? "").TrimEnd('\r', '\n'), false); }
+
         public static async Task<Outcome> InsertAsync(string text, bool autoPaste)
         {
             text = text.TrimEnd('\r', '\n'); // trailing newline auto-submits in terminals

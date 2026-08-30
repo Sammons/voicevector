@@ -404,9 +404,10 @@ static void test_cleanup(void) {
         expect(!vv_router_parse("no json here", &machine, &window), "router: garbage is false");
         GPtrArray *ms = g_ptr_array_new_with_free_func((GDestroyNotify)vv_router_machine_free);
         g_ptr_array_add(ms, vv_router_machine_new("tux", true, "1: A — B"));
-        char *rm2 = vv_router_message("hi", ms);
-        expect(strstr(rm2, "<draft>\nhi\n</draft>") && strstr(rm2, "(current: the user dictated here)"),
-               "router: message shape");
+        char *rm2 = vv_router_message("hi", "Hey Slack, hi", ms);
+        expect(strstr(rm2, "<text>\nhi\n</text>") && strstr(rm2, "<spoken-request>\nHey Slack, hi\n</spoken-request>")
+               && strstr(rm2, "(current: the user dictated here)"),
+               "router: message carries spoken request and text");
         g_free(rm2); g_ptr_array_unref(ms);
         char *corr = vv_router_correction("bogus");
         expect(strstr(corr, "was not usable") && strstr(corr, "bogus") && strstr(corr, "Do not invent"),

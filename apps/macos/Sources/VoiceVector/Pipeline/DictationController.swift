@@ -277,7 +277,8 @@ final class DictationController: ObservableObject {
         }
         guard review?.slot.id == id else { return }   // this review ended/replaced while gathering
         let message = CleanupEngine.routerMessage(
-            draft: session.entry.cleaned, machines: contexts.map { ($0.machine, $0.isLocal, $0.windowLines) })
+            draft: session.entry.cleaned, spoken: session.entry.raw,
+            machines: contexts.map { ($0.machine, $0.isLocal, $0.windowLines) })
         let images = contexts.flatMap(\.screens)
         let catalog = contexts.map {
             CleanupEngine.RouterCatalog(machine: $0.machine, windowIDs: Set($0.windows.map(\.id)))
@@ -461,8 +462,16 @@ final class DictationController: ObservableObject {
             }
         } else {
             state = .processing("Pasting…")
-            if !WindowInventory.activate(windowID: target.window) {
-                notify(title: "Window is gone", body: "Pasting into the focused window instead.")
+            // Only paste once the target window is genuinely frontmost. If the
+            // system refused the focus change, pasting now would dump the text
+            // into whatever the user had focused (e.g. the terminal), so copy
+            // it and tell them instead.
+            if target.window != 0, !WindowInventory.activate(windowID: target.window) {
+                paste.copyToClipboard(session.entry.cleaned)
+                notify(title: "Couldn't focus \(target.label)",
+                       body: "The text is on the clipboard — click \(target.label) and press ⌘V.")
+                finish(with: .idle)
+                return
             }
             try? await Task.sleep(nanoseconds: 350_000_000)   // let focus settle
             await deliver(entry: session.entry, slot: session.slot, config: session.config)
@@ -625,7 +634,8 @@ final class DictationController: ObservableObject {
                 do {
                     entry.cleaned = try await CleanupEngine.cleanup(raw: entry.raw, config: policy.config,
                                                                     profile: cleanupProfile,
-                                                                    images: pendingScreenshots?.attachments ?? [])
+                                                                    images: pendingScreenshots?.attachments ?? [],
+                                                                    stripRouting: dictationProfile?.routerEnabled == true)
                 } catch {
                     entry.cleanupLabel += " (failed — raw used)"
                     Log.error("Cleanup failed, using raw transcript: \(error.localizedDescription)")

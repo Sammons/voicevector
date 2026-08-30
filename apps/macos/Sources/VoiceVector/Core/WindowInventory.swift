@@ -34,26 +34,44 @@ enum WindowInventory {
         }
     }
 
-    /// Activates the app owning `windowID` and raises that window.
-    /// Returns false when the window is gone.
+    /// Activates the app owning `windowID`, raises that window, and confirms
+    /// it actually became frontmost. Returns false when the window is gone OR
+    /// the system refused the focus change — callers must NOT paste on false,
+    /// or the text lands in whatever was already focused.
     @discardableResult
     static func activate(windowID: UInt32) -> Bool {
-        guard let target = list().first(where: { $0.id == windowID }) else { return false }
-        guard let app = NSRunningApplication(processIdentifier: target.pid) else { return false }
-        app.activate()
-        let element = AXUIElementCreateApplication(target.pid)
+        guard let target = list().first(where: { $0.id == windowID }),
+              let app = NSRunningApplication(processIdentifier: target.pid) else { return false }
+
+        // Raise the specific window first (so activating brings *it* forward,
+        // not the app's last-focused window), then activate the app.
+        raiseWindow(pid: target.pid, windowID: windowID)
+        app.activate(options: [.activateAllWindows])
+        raiseWindow(pid: target.pid, windowID: windowID)
+
+        // macOS can silently deny a focus change from a background app; poll
+        // briefly and report whether the target genuinely came to the front.
+        let deadline = Date().addingTimeInterval(0.8)
+        while Date() < deadline {
+            if NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid { return true }
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
+        }
+        return NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid
+    }
+
+    private static func raiseWindow(pid: pid_t, windowID: UInt32) {
+        let element = AXUIElementCreateApplication(pid)
         var value: CFTypeRef?
-        if AXUIElementCopyAttributeValue(element, kAXWindowsAttribute as CFString, &value) == .success,
-           let windows = value as? [AXUIElement] {
-            for window in windows {
-                var id: UInt32 = 0
-                if _AXUIElementGetWindow(window, &id) == .success, id == windowID {
-                    AXUIElementPerformAction(window, kAXRaiseAction as CFString)
-                    break
-                }
+        guard AXUIElementCopyAttributeValue(element, kAXWindowsAttribute as CFString, &value) == .success,
+              let windows = value as? [AXUIElement] else { return }
+        for window in windows {
+            var id: UInt32 = 0
+            if _AXUIElementGetWindow(window, &id) == .success, id == windowID {
+                AXUIElementSetAttributeValue(window, kAXMainAttribute as CFString, kCFBooleanTrue)
+                AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+                break
             }
         }
-        return true
     }
 
     /// Router input: one numbered line per window.

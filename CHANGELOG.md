@@ -6,6 +6,25 @@ all three apps share one version number.
 
 ## Unreleased
 
+- **Speak the destination.** When you open a router dictation by naming where
+  it should go — "Hey Slack, …", "Send this to the terminal —", "Tell Ben
+  that …" — the router now honours that spoken destination (it's given your
+  original words alongside the window lists), and the cleanup strips the
+  addressing phrase out of the pasted text instead of leaving it in.
+- **Routed text only pastes once the target window is actually focused.** On
+  macOS and Windows the app now confirms the destination window came to the
+  front before pasting; if the system refuses the focus change, the text is
+  copied with a "click it and press ⌘V/Ctrl+V" notice instead of landing in
+  whatever window happened to be focused (e.g. the terminal). (Linux/Wayland
+  can't focus another app's window, so it pastes into the focused one as
+  before.)
+- **The AI router's choice is validated and bounced back.** The destination
+  must be a machine and window that were actually offered (or window 0 for the
+  current focus); an invalid or hallucinated pick is returned to the router
+  with a specific error telling it what was wrong, up to three tries, before
+  falling back to the normal local paste. No more silent routing to nothing.
+- **A spoken revision that transcribes to nothing now says so** ("Didn't catch
+  that…") instead of silently doing nothing.
 - **Multi-machine peering** (Settings → Multi-machine, all three apps).
   VoiceVector instances on the same tailnet/LAN pair with a 6-digit code
   confirmed on both screens (Bluetooth-style numeric comparison over a

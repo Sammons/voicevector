@@ -281,9 +281,12 @@ enum SelfTest {
         expect(CleanupEngine.parseRouterVerdict("{\"machine\":\"m\"}")
                == CleanupEngine.RouterVerdict(machine: "m", window: 0), "router: missing window is 0")
         expect(CleanupEngine.parseRouterVerdict("no json here") == nil, "router: garbage is nil")
-        let routerMsg = CleanupEngine.routerMessage(draft: "hi", machines: [("mac", true, "1: A — B")])
-        expect(routerMsg.contains("<draft>\nhi\n</draft>") && routerMsg.contains("(current: the user dictated here)"),
-               "router: message shape")
+        let routerMsg = CleanupEngine.routerMessage(draft: "hi", spoken: "Hey Slack, hi",
+                                                   machines: [("mac", true, "1: A — B")])
+        expect(routerMsg.contains("<text>\nhi\n</text>")
+               && routerMsg.contains("<spoken-request>\nHey Slack, hi\n</spoken-request>")
+               && routerMsg.contains("(current: the user dictated here)"),
+               "router: message carries spoken request and text")
         let catalog = [CleanupEngine.RouterCatalog(machine: "mac", windowIDs: [1, 2])]
         expect(CleanupEngine.routerVerdictValid(.init(machine: "mac", window: 1), catalog: catalog),
                "router: listed window is valid")

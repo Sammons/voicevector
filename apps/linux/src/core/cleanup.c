@@ -38,9 +38,12 @@ void vv_router_machine_free(VvRouterMachine *m) {
     g_free(m->name); g_free(m->windows); g_free(m);
 }
 
-char *vv_router_message(const char *draft, GPtrArray *machines) {
+char *vv_router_message(const char *draft, const char *spoken, GPtrArray *machines) {
     GString *s = g_string_new(NULL);
-    g_string_append_printf(s, "<draft>\n%s\n</draft>", draft);
+    char *trimmed = spoken ? g_strstrip(g_strdup(spoken)) : NULL;
+    if (trimmed && *trimmed) g_string_append_printf(s, "<spoken-request>\n%s\n</spoken-request>\n", trimmed);
+    g_free(trimmed);
+    g_string_append_printf(s, "<text>\n%s\n</text>", draft);
     for (guint i = 0; machines && i < machines->len; i++) {
         VvRouterMachine *m = g_ptr_array_index(machines, i);
         g_string_append_printf(s, "\nMachine \"%s\"%s windows:\n%s", m->name,
@@ -78,6 +81,10 @@ bool vv_router_parse(const char *reply, char **machine_out, guint32 *window_out)
 
 const char *vv_screenshot_note(void) {
     return "Screenshots of the user's displays are attached for context (names, terms, tone), each preceded by a caption saying which display is active — the one the text will be inserted into; never copy content from them.";
+}
+
+const char *vv_routing_prefix_note(void) {
+    return "This dictation may begin with a short phrase naming where to send it (for example \"Hey Slack,\", \"Send this to the terminal —\", \"In Groq:\", \"Tell Ben that ...\"). That opening phrase is a routing instruction, not part of the message: remove it entirely and output only the message the user wants delivered.";
 }
 
 VvScreenshot *vv_screenshot_new(GBytes *jpeg, char *caption_take) {

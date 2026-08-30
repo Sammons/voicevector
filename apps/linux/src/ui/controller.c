@@ -348,7 +348,10 @@ static gpointer pipeline_thread(gpointer data) {
         } else if (eff.provider && vv_kind_supports_chat(eff.provider->kind) && *eff.provider->chat_model) {
             g_free(entry->cleanup_label); entry->cleanup_label = g_strdup_printf("%s/%s", eff.provider->name, eff.provider->chat_model);
             char *key = vv_secret_get(eff.provider->id);
-            char *system = vv_cleanup_system_prompt(&eff.config);
+            char *sys0 = vv_cleanup_system_prompt(&eff.config);
+            char *system = (profile && profile->router_enabled)
+                ? g_strconcat(sys0, "\n", vv_routing_prefix_note(), NULL) : g_strdup(sys0);
+            g_free(sys0);
             char *user = vv_wrap_transcript(entry->raw);
             char *reply = NULL, *error = NULL;
             bool cok;
@@ -358,6 +361,7 @@ static gpointer pipeline_thread(gpointer data) {
                 g_free(with);
                 if (!cok) { g_free(error); error = NULL; cok = vv_provider_chat(eff.provider, key, system, user, NULL, &reply, &error); }
             } else cok = vv_provider_chat(eff.provider, key, system, user, NULL, &reply, &error);
+            g_free(system);
             if (cok) { g_free(entry->cleaned); entry->cleaned = vv_post_process(reply, entry->raw); }
             else {
                 char *label = g_strconcat(entry->cleanup_label, " (failed — raw used)", NULL);
@@ -719,6 +723,7 @@ typedef struct {
     VvController *c;
     Review *r;                     /* checked against p->review before use */
     char *draft;
+    char *spoken;                  /* the raw transcript, for spoken addressing */
     VvProvider *provider;          /* owned snapshot resolved on the main thread */
     char *machine_name;            /* owned */
     GPtrArray *peers;              /* owned VvPeer* snapshots */
@@ -741,7 +746,7 @@ static gboolean router_done(gpointer data) {
         t->r->route_window = t->route_window;
         set_state(c, VV_STATE_REVIEWING, NULL);
     }
-    g_free(t->draft); g_free(t->machine_name);
+    g_free(t->draft); g_free(t->spoken); g_free(t->machine_name);
     if (t->provider) vv_provider_free(t->provider);
     if (t->peers) g_ptr_array_unref(t->peers);
     vv_screenshot_set_unref(t->screens);
@@ -772,7 +777,7 @@ static gpointer router_thread(gpointer data) {
             g_ptr_array_add(attachments, vv_screenshot_new(shot->jpeg, g_strdup(shot->caption)));
         }
     }
-    char *base = vv_router_message(t->draft, machines);
+    char *base = vv_router_message(t->draft, t->spoken, machines);
     char *key = vv_secret_get(provider->id);
     /* The model must pick a machine + window that were offered; an invalid or
      * hallucinated choice is bounced back with the reason, up to a few tries. */
@@ -848,6 +853,7 @@ static void start_router(VvController *c, Review *r, VvProfile *profile) {
     RouterTask *t = g_new0(RouterTask, 1);
     t->c = c; t->r = r;
     t->draft = g_strdup(r->entry->cleaned);
+    t->spoken = g_strdup(r->entry->raw);
     t->machine_name = g_strdup(vv_multi_machine_name(&c->config->multi_machine));
     if (chosen) { VvJson *pj = vv_provider_to_json(chosen); t->provider = vv_provider_from_json(pj); vv_json_free(pj); }
     t->peers = g_ptr_array_new_with_free_func((GDestroyNotify)vv_peer_ref_free);

@@ -364,10 +364,12 @@ namespace VoiceVector.SelfTest
             var bare2 = CleanupEngine.ParseRouterVerdict("{\"machine\":\"m\"}");
             Expect(bare2 != null && bare2.Window == 0, "router: missing window is 0");
             Expect(CleanupEngine.ParseRouterVerdict("no json here") == null, "router: garbage is null");
-            var routerMsg = CleanupEngine.RouterMessage("hi",
+            var routerMsg = CleanupEngine.RouterMessage("hi", "Hey Slack, hi",
                 new List<Tuple<string, bool, string>> { Tuple.Create("win", true, "1: A — B") });
-            Expect(routerMsg.Contains("<draft>\nhi\n</draft>")
-                   && routerMsg.Contains("(current: the user dictated here)"), "router: message shape");
+            Expect(routerMsg.Contains("<text>\nhi\n</text>")
+                   && routerMsg.Contains("<spoken-request>\nHey Slack, hi\n</spoken-request>")
+                   && routerMsg.Contains("(current: the user dictated here)"),
+                   "router: message carries spoken request and text");
             var catalog = new Dictionary<string, HashSet<uint>> { { "win", new HashSet<uint> { 1, 2 } } };
             Expect(CleanupEngine.RouterVerdictValid(new CleanupEngine.RouterVerdict { Machine = "win", Window = 1 }, catalog),
                    "router: listed window is valid");

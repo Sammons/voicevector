@@ -30,6 +30,7 @@ namespace VoiceVector.Win.Services
         [DllImport("user32.dll")] private static extern int GetWindowLongW(IntPtr hWnd, int index);
         [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
         [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hWnd, int cmd);
+        [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
 
         private const int GWL_EXSTYLE = -20;
         private const int WS_EX_TOOLWINDOW = 0x80;
@@ -60,7 +61,9 @@ namespace VoiceVector.Win.Services
             return result;
         }
 
-        /// <summary>Brings the window to the foreground; false when it is gone.</summary>
+        /// <summary>Brings the window to the foreground and confirms it took;
+        /// false when the window is gone OR Windows refused the focus change,
+        /// so the caller must NOT paste (it would land in the focused window).</summary>
         public static bool Activate(uint id)
         {
             // HWNDs carry 32 significant bits and widen by SIGN-extension on
@@ -68,7 +71,15 @@ namespace VoiceVector.Win.Services
             var hwnd = new IntPtr(unchecked((int)id));
             if (!IsWindowVisible(hwnd)) return false;
             if (IsIconic(hwnd)) ShowWindow(hwnd, SW_RESTORE);
-            return SetForegroundWindow(hwnd);
+            SetForegroundWindow(hwnd);
+            // Foreground changes from a background process are often denied
+            // (taskbar flash instead); poll to see whether it really happened.
+            for (int i = 0; i < 16; i++)
+            {
+                if (GetForegroundWindow() == hwnd) return true;
+                System.Threading.Thread.Sleep(50);
+            }
+            return GetForegroundWindow() == hwnd;
         }
 
         /// <summary>Router input: one numbered line per window.</summary>

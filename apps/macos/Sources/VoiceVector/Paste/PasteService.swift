@@ -52,6 +52,10 @@ final class PasteService {
         var items: [[NSPasteboard.PasteboardType: Data]]
     }
 
+    /// Puts text on the clipboard without pasting (for when we can't safely
+    /// focus the destination).
+    func copyToClipboard(_ text: String) { writePlain(text.trimmingCharacters(in: .newlines)) }
+
     func insert(_ text: String, autoPaste: Bool, preferAppleScript: Bool = false) async -> PasteOutcome {
         let pasteboard = NSPasteboard.general
         // Trailing newlines auto-submit in chat TUIs and terminals.
