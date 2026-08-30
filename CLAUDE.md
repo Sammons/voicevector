@@ -12,7 +12,7 @@ frontmost app → save as Markdown → optional per-folder webhook.
 | `apps/windows/` | C# / .NET Framework 4.8 + WPF, single exe (no admin). |
 | `apps/linux/` | C + GTK 4 / libadwaita, system libraries only. `make -C apps/linux` (app), `make -C apps/linux test` (core self-test, GLib + libcurl only). See `docs/linux/README.md`. |
 | `docs/` | Cross-platform contracts (storage format, providers, webhook, config) + per-platform notes in `docs/mac/`, `docs/windows/`. |
-| `shared/prompts/` | Canonical cleanup system prompts. Both apps embed copies; their self-tests assert equality with these files. |
+| `shared/prompts/` | Canonical cleanup/review/router system prompts. The apps embed copies; their self-tests assert equality with these files. |
 
 ## Build & test
 

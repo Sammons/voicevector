@@ -16,7 +16,7 @@ CORE_SRC := $(wildcard src/core/*.c)
 PLAT_SRC := $(wildcard src/platform/*.c)
 UI_SRC   := $(wildcard src/ui/*.c)
 
-PROMPTS  := ../../shared/prompts/cleanup-rich.txt ../../shared/prompts/cleanup-light.txt ../../shared/prompts/review.txt
+PROMPTS  := ../../shared/prompts/cleanup-rich.txt ../../shared/prompts/cleanup-light.txt ../../shared/prompts/review.txt ../../shared/prompts/router.txt
 
 all: $(BUILD)/voicevector
 core: $(BUILD)/voicevector-core

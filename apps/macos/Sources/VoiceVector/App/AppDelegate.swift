@@ -30,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if state.accessibilityGranted {
             state.hotkey.start()
         }
+        setUpPeering()
         showWindow()
 
         // Quiet update check for released builds (dev builds check manually).
@@ -117,6 +118,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showFallbackAlertIfVisible(title: String, body: String) {
         Log.error("\(title): \(body)")
+    }
+
+    // MARK: Multi-machine peering
+
+    private func setUpPeering() {
+        let service = PeerService.shared
+        service.configProvider = { [weak self] in self?.state.config.multiMachine ?? MultiMachineConfig() }
+        service.addPeer = { [weak self] peer in
+            guard let self else { return }
+            if !self.state.config.multiMachine.peers.contains(where: { $0.fingerprint == peer.fingerprint }) {
+                self.state.config.multiMachine.peers.append(peer)
+            }
+        }
+        service.onDeliver = { [weak self] text, window, done in
+            guard let self else { done(false, "not ready"); return }
+            let machine = "a paired machine"
+            self.state.dictation.receiveRoutedText(text, window: window, from: machine, completion: done)
+        }
+        service.onIncomingPair = { [weak self] name, code, answer in
+            guard let self else { answer(false); return }
+            self.showWindow()
+            let alert = NSAlert()
+            alert.messageText = "Pair with “\(name)”?"
+            alert.informativeText = "Confirm only if the other machine shows this code:\n\n\(code.prefix(3)) \(code.suffix(3))"
+            alert.addButton(withTitle: "They Match — Pair")
+            alert.addButton(withTitle: "Cancel")
+            answer(alert.runModal() == .alertFirstButtonReturn)
+        }
+        service.applyConfig()
+        state.$config
+            .map(\.multiMachine)
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { _ in PeerService.shared.applyConfig() }
+            .store(in: &cancellables)
     }
 
     // MARK: Status item

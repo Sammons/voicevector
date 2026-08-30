@@ -19,6 +19,7 @@ namespace VoiceVector.Win
         private readonly TextBlock _clock;
         private readonly Border _staging;
         private readonly TextBlock _draft;
+        private readonly TextBlock _routeLine;
         private readonly TextBlock _reviewHint;
         private readonly StackPanel _bars;
         private readonly Rectangle[] _barShapes = new Rectangle[14];
@@ -113,6 +114,15 @@ namespace VoiceVector.Win
                 Foreground = new SolidColorBrush(Color.FromArgb(190, 240, 238, 248)),
                 Margin = new Thickness(0, 8, 0, 0),
             };
+            _routeLine = new TextBlock
+            {
+                FontFamily = Theme.UiFont,
+                FontSize = 12,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = new SolidColorBrush(Theme.Accent),
+                Margin = new Thickness(0, 8, 0, 0),
+                Visibility = Visibility.Collapsed,
+            };
             var stagingBody = new StackPanel();
             stagingBody.Children.Add(new ScrollViewer
             {
@@ -120,6 +130,7 @@ namespace VoiceVector.Win
                 MaxHeight = 170,
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             });
+            stagingBody.Children.Add(_routeLine);
             stagingBody.Children.Add(_reviewHint);
             _staging = new Border
             {
@@ -158,6 +169,13 @@ namespace VoiceVector.Win
 
         public void ShowHud(string label, string draft)
         {
+            ShowHud(label, draft, null);
+        }
+
+        public void ShowHud(string label, string draft, string route)
+        {
+            _routeLine.Text = route ?? "";
+            _routeLine.Visibility = route == null ? Visibility.Collapsed : Visibility.Visible;
             _label.Text = label;
             if (draft != null)
             {

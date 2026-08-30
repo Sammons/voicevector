@@ -240,15 +240,15 @@ namespace VoiceVector.Win
             {
                 case DictationController.StateKind.Recording:
                     _statusLine.Text = "Recording…";
-                    EnsureHud().ShowHud("Listening…", dictation.ReviewDraft);
+                    EnsureHud().ShowHud("Listening…", dictation.ReviewDraft, dictation.ReviewRoute);
                     break;
                 case DictationController.StateKind.Processing:
                     _statusLine.Text = dictation.StateDetail;
-                    EnsureHud().ShowHud(dictation.StateDetail, dictation.ReviewDraft);
+                    EnsureHud().ShowHud(dictation.StateDetail, dictation.ReviewDraft, dictation.ReviewRoute);
                     break;
                 case DictationController.StateKind.Reviewing:
                     _statusLine.Text = "Reviewing — press the hotkey to say a change, Enter to paste, Esc to discard";
-                    EnsureHud().ShowHud("Reviewing", dictation.ReviewDraft);
+                    EnsureHud().ShowHud("Reviewing", dictation.ReviewDraft, dictation.ReviewRoute);
                     break;
                 case DictationController.StateKind.Failed:
                     _statusLine.Text = dictation.StateDetail;

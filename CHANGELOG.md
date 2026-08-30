@@ -4,6 +4,26 @@ All notable changes to VoiceVector. Each release's entry doubles as its
 GitHub release notes. Versions follow [semantic versioning](https://semver.org);
 all three apps share one version number.
 
+## Unreleased
+
+- **Multi-machine peering** (Settings → Multi-machine, all three apps).
+  VoiceVector instances on the same tailnet/LAN pair with a 6-digit code
+  confirmed on both screens (Bluetooth-style numeric comparison over a
+  commit-then-reveal exchange), then talk over TLS with pinned self-signed
+  identities — no central authority. Per-peer permissions, both off by
+  default: "may see my screens" and "may paste into me". Protocol:
+  `docs/multi-machine.md`.
+- **Route with AI** (per hotkey, needs Review before pasting). A router model
+  looks at the draft, your windows and screens — and paired machines' too —
+  and picks the window the text was meant for; the staging card shows its
+  choice ("→ Slack on crankshaft") and ⏎ sends it there: the target window
+  is raised before pasting locally, or the text is delivered to the paired
+  machine, which pastes and saves it as a routed entry. Any router failure
+  falls back to the normal paste. Prompt: `shared/prompts/router.txt`.
+  Linux note: Wayland hides other apps' windows, so a Linux machine offers
+  its screens and receives text into the focused window, without per-window
+  targeting.
+
 ## v0.4.1 — 2026-08-30
 
 - **Screenshot context covers every display.** One image per display is

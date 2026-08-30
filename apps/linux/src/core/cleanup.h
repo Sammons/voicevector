@@ -7,6 +7,7 @@
 
 const char *vv_cleanup_default_prompt(VvCleanupMode mode);
 const char *vv_review_prompt(void);
+const char *vv_router_prompt(void);
 const char *vv_screenshot_note(void);
 
 /* One display's capture plus the caption sent as a text part before it. */
@@ -30,6 +31,15 @@ VvScreenshotSet *vv_screenshot_set_ref(VvScreenshotSet *s);
 void vv_screenshot_set_unref(VvScreenshotSet *s);
 /* Captioned attachments for the chat call: GPtrArray of VvScreenshot (free func set). */
 GPtrArray *vv_screenshot_set_attachments(const VvScreenshotSet *s);
+
+/* AI routing (docs/multi-machine.md). */
+typedef struct { char *name; bool current; char *windows; } VvRouterMachine;
+VvRouterMachine *vv_router_machine_new(const char *name, bool current, const char *windows);
+void vv_router_machine_free(VvRouterMachine *m);
+/* The router's user message: the draft plus each machine's window list. */
+char *vv_router_message(const char *draft, GPtrArray *machines /* VvRouterMachine* */);
+/* Extracts {machine, window} from a router reply; false when unparseable. */
+bool vv_router_parse(const char *reply, char **machine_out, guint32 *window_out);
 
 GPtrArray *vv_parse_vocabulary(const char *raw);                 /* char* */
 char *vv_merge_vocabulary(const char *global, const char *extra);

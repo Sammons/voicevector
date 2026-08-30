@@ -29,8 +29,22 @@ namespace VoiceVector.Win.Services
             public DictationProfile Profile;
             public CleanupEngine.EffectiveCleanup Policy;
             public ScreenshotSet Screenshots;
+            public RouteTarget Route;
             public int Revisions;
         }
+        /// <summary>Where the router decided the draft should go.</summary>
+        public sealed class RouteTarget
+        {
+            public string Machine = "";
+            public uint Window;            // 0 = whatever is focused there
+            public PeerRef Peer;           // null = this machine
+            public string Label = "";
+        }
+
+        /// <summary>Router verdict shown in the staging card, or null.</summary>
+        public string ReviewRoute;
+
+        private List<WindowInfo> _pendingWindows = new List<WindowInfo>();
         private ReviewSession _review;
         private string _commandPath;
         private ScreenshotSet _pendingScreenshots;
@@ -115,6 +129,10 @@ namespace VoiceVector.Win.Services
                 _pendingScreenshots = ScreenCapture.AllScreens();
                 _library().SaveScreenshots(slot.Key, folder, _pendingScreenshots);
             }
+            _pendingWindows = new List<WindowInfo>();
+            if (startProfile != null && startProfile.RouterEnabled && startProfile.ReviewBeforePaste
+                && FakeAudioPath == null)
+                _pendingWindows = WindowInventory.List();
 
             // Arm silence-gap streaming (not with fake audio or single-pass).
             lock (_segmentLock) _segmentTasks.Clear();
@@ -230,7 +248,100 @@ namespace VoiceVector.Win.Services
                 Profile = profile, Policy = policy, Screenshots = _pendingScreenshots,
             };
             ReviewDraft = entry.Cleaned;
+            ReviewRoute = null;
             SetState(StateKind.Reviewing, "");
+            if (profile != null && profile.RouterEnabled)
+            {
+                ReviewRoute = "Routing…";
+                SetState(StateKind.Reviewing, "");
+                var _ = RunRouterAsync();
+            }
+        }
+
+        // -- AI routing (docs/multi-machine.md) ------------------------------
+
+        private static ProviderProfile RouterProvider(ReviewSession session)
+        {
+            if (session.Profile != null && session.Profile.RouterProviderId.HasValue)
+            {
+                var chosen = session.Config.Providers.FirstOrDefault(
+                    p => p.Id == session.Profile.RouterProviderId.Value);
+                if (chosen != null) return chosen;
+            }
+            return ReviewProvider(session);
+        }
+
+        private async Task RunRouterAsync()
+        {
+            var session = _review;
+            var draft = ReviewDraft;
+            if (session == null || draft == null) { ReviewRoute = null; return; }
+            var provider = RouterProvider(session);
+            if (provider == null) { ReviewRoute = null; SetState(StateKind.Reviewing, ""); return; }
+            var mm = session.Config.MultiMachine;
+            var machineName = mm.ResolvedMachineName;
+            var contexts = new List<MachineContext>
+            {
+                PeerService.LocalContext(machineName, _pendingWindows, _pendingScreenshots),
+            };
+            var peers = mm.Peers.Where(p => p.Address.Length > 0).ToList();
+            if (peers.Count > 0)
+            {
+                var fetches = peers.Select(p => PeerService.Shared.FetchContextAsync(p)).ToList();
+                foreach (var fetch in fetches)
+                {
+                    var context = await fetch.ConfigureAwait(false);
+                    if (context != null) contexts.Add(context);
+                }
+            }
+            if (_review != session) return;   // review ended while gathering
+            var message = CleanupEngine.RouterMessage(draft,
+                contexts.Select(c => Tuple.Create(c.Machine, c.IsLocal, c.WindowLines)).ToList());
+            var images = contexts.SelectMany(c => c.Screens).ToList();
+            try
+            {
+                var client = new ProviderClient(provider, KeyStore.GetApiKey(provider.Id));
+                string reply;
+                try { reply = await client.ChatAsync(CleanupEngine.RouterPrompt, message, images).ConfigureAwait(false); }
+                catch { reply = await client.ChatAsync(CleanupEngine.RouterPrompt, message).ConfigureAwait(false); }
+                var verdict = CleanupEngine.ParseRouterVerdict(reply);
+                if (_review != session) return;
+                ApplyVerdict(verdict, contexts, machineName, peers, session);
+            }
+            catch (Exception e)
+            {
+                Log.Error("Router failed: " + e.Message);
+                ReviewRoute = null;
+            }
+            if (_review == session) SetState(StateKind.Reviewing, "");
+        }
+
+        private void ApplyVerdict(CleanupEngine.RouterVerdict verdict, List<MachineContext> contexts,
+                                  string machineName, List<PeerRef> peers, ReviewSession session)
+        {
+            ReviewRoute = null;
+            session.Route = null;
+            if (verdict == null) return;
+            var context = contexts.FirstOrDefault(c => c.Machine == verdict.Machine);
+            if (context == null) return;
+            var window = context.Windows.FirstOrDefault(w => w.Id == verdict.Window);
+            var windowLabel = window == null ? null
+                : (window.Title.Length == 0 ? window.App : window.App + " — " + window.Title);
+            if (context.IsLocal)
+            {
+                if (window == null) return;   // focused window — the normal paste
+                session.Route = new RouteTarget { Machine = machineName, Window = window.Id, Label = windowLabel };
+                ReviewRoute = "→ " + windowLabel;
+            }
+            else
+            {
+                var peer = peers.FirstOrDefault(p => p.Name == context.Machine);
+                if (peer == null) return;
+                var label = (windowLabel != null ? windowLabel + " on " : "") + context.Machine;
+                session.Route = new RouteTarget
+                    { Machine = context.Machine, Window = window != null ? window.Id : 0, Peer = peer, Label = label };
+                ReviewRoute = "→ " + label;
+            }
         }
 
         private static ProviderProfile ReviewProvider(ReviewSession session)
@@ -341,9 +452,94 @@ namespace VoiceVector.Win.Services
             _review = null;
             session.Entry.Cleaned = ReviewDraft;
             ReviewDraft = null;
+            ReviewRoute = null;
+            if (session.Route != null)
+                session.Entry.CleanupLabel += " · routed to " + session.Route.Label;
             _library().Save(session.Entry);
             RaiseLibraryChanged();
-            var _ = DeliverAsync(session.Entry, session.AudioPath, session.Folder, session.Config);
+            var _ = DeliverRoutedAsync(session);
+        }
+
+        private async Task DeliverRoutedAsync(ReviewSession session)
+        {
+            var target = session.Route;
+            if (target == null)
+            {
+                await DeliverAsync(session.Entry, session.AudioPath, session.Folder, session.Config)
+                    .ConfigureAwait(false);
+                return;
+            }
+            if (target.Peer != null)
+            {
+                SetState(StateKind.Processing, "Sending to " + target.Machine + "…");
+                var error = await PeerService.Shared.DeliverAsync(session.Entry.Cleaned, target.Window, target.Peer)
+                    .ConfigureAwait(false);
+                if (error != null)
+                {
+                    RaiseNotice("Could not deliver to " + target.Machine + ": " + error + " — pasting here.");
+                    await DeliverAsync(session.Entry, session.AudioPath, session.Folder, session.Config)
+                        .ConfigureAwait(false);
+                    return;
+                }
+                SetState(StateKind.Idle, "");
+                WebhookConfig webhook;
+                if (session.Config.FolderWebhooks.TryGetValue(session.Folder, out webhook) && webhook.Enabled)
+                {
+                    var finished = session.Entry;
+                    var path = session.AudioPath;
+                    var _ = Task.Run(() => WebhookSender.SendAsync(finished, path, webhook));
+                }
+            }
+            else
+            {
+                SetState(StateKind.Processing, "Pasting…");
+                if (!WindowInventory.Activate(target.Window))
+                    Log.Error("Routed window is gone; pasting into the focused window.");
+                await Task.Delay(350).ConfigureAwait(false);
+                await DeliverAsync(session.Entry, session.AudioPath, session.Folder, session.Config)
+                    .ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>Inbound routed text from a paired machine: activate the
+        /// window (when known), paste, save a routed entry.</summary>
+        public void ReceiveRoutedText(string text, uint window, string machine,
+                                      Action<bool, string> done)
+        {
+            if (IsBusy) { done(false, "busy dictating"); return; }
+            var _ = ReceiveRoutedAsync(text, window, machine, done);
+        }
+
+        private async Task ReceiveRoutedAsync(string text, uint window, string machine,
+                                              Action<bool, string> done)
+        {
+            try
+            {
+                if (window != 0) WindowInventory.Activate(window);
+                await Task.Delay(350).ConfigureAwait(false);
+                var config = _config();
+                var library = _library();
+                var outcome = await PasteService.InsertAsync(text, config.AutoPaste).ConfigureAwait(false);
+                var slot = library.NewEntrySlot(config.ActiveFolder);
+                var entry = new Entry
+                {
+                    Id = slot.Key, Folder = config.ActiveFolder, Date = DateTimeOffset.Now,
+                    Duration = 0, SttLabel = "routed from " + machine, Status = "complete",
+                    Cleaned = text, Raw = text,
+                };
+                if (outcome == PasteService.Outcome.CopiedOnly)
+                {
+                    entry.Status = "complete (copied only)";
+                    RaiseNotice("Text from " + machine + " copied — press Ctrl+V to insert it.");
+                }
+                library.Save(entry);
+                RaiseLibraryChanged();
+                done(true, "");
+            }
+            catch (Exception e)
+            {
+                done(false, e.Message);
+            }
         }
 
         /// <summary>Esc while reviewing: keep the entry (with the draft) but don't paste.</summary>
@@ -354,6 +550,7 @@ namespace VoiceVector.Win.Services
             _review = null;
             if (ReviewDraft != null) session.Entry.Cleaned = ReviewDraft;
             ReviewDraft = null;
+            ReviewRoute = null;
             session.Entry.Status = "complete (not pasted)";
             _library().Save(session.Entry);
             RaiseLibraryChanged();

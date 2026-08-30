@@ -24,6 +24,8 @@ struct SettingsView: View {
                     .tabItem { Label("Folders & Webhooks", systemImage: "folder") }
                 GeneralSettings()
                     .tabItem { Label("General", systemImage: "gearshape") }
+                MultiMachineSettings()
+                    .tabItem { Label("Multi-machine", systemImage: "laptopcomputer.and.iphone") }
                 AboutSettings()
                     .tabItem { Label("About", systemImage: "info.circle") }
             }
@@ -466,7 +468,25 @@ struct ProfileRow: View {
                             }
                         }
                         .frame(maxWidth: 330)
+                        Toggle("Route with AI", isOn: binding(\.routerEnabled))
+                            .toggleStyle(.checkbox)
                         Spacer()
+                    }
+                    if profile.routerEnabled {
+                        HStack(spacing: 8) {
+                            Picker("Router model", selection: binding(\.routerProviderID)) {
+                                Text("Same as review").tag(UUID?.none)
+                                ForEach(chatProviders) { p in
+                                    Text("\(p.name) — \(p.chatModel)").tag(Optional(p.id))
+                                }
+                            }
+                            .frame(maxWidth: 330)
+                            Spacer()
+                        }
+                        Text("A router model looks at your windows (and paired machines' windows) and picks where the draft should go; the staging card shows its choice and ⏎ sends it there. Set up machines in Settings → Multi-machine.")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     Text("The cleaned text is staged above the recording pill instead of pasted. Press the hotkey and say a change (\"make it shorter\", \"turn that into a list\") as many times as you like; ⏎ pastes, Esc discards.")
                         .font(.caption2)
@@ -677,6 +697,156 @@ struct FolderWebhookRow: View {
 }
 
 // MARK: - General
+
+// MARK: - Multi-machine
+
+/// Pairing and peers (docs/multi-machine.md).
+struct MultiMachineSettings: View {
+    @EnvironmentObject var app: AppState
+    @State private var pairAddress = ""
+    @State private var pairingCode: String?
+    @State private var pairingAnswer: ((Bool) -> Void)?
+    @State private var pairingStatus: String?
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("This machine").vvSectionTitle()
+                    Toggle("Allow paired machines to connect", isOn: $app.config.multiMachine.enabled)
+                    HStack(spacing: 8) {
+                        TextField("Machine name", text: $app.config.multiMachine.machineName,
+                                  prompt: Text(MultiMachineConfig().resolvedMachineName))
+                            .frame(maxWidth: 220)
+                        TextField("Port", value: $app.config.multiMachine.port, format: .number.grouping(.never))
+                            .frame(width: 70)
+                        Spacer()
+                    }
+                    if app.config.multiMachine.enabled {
+                        let fp = PeerService.shared.fingerprintHex
+                        Text("Identity: \(fp.isEmpty ? "created when the listener starts" : String(fp.prefix(16)) + "…")")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                    Text("Machines pair once with a 6-digit code confirmed on both screens, then talk over TLS with pinned identities. Use tailnet or LAN addresses only.")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .vvCard()
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Paired machines").vvSectionTitle()
+                    if app.config.multiMachine.peers.isEmpty {
+                        Text("No machines paired yet.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    ForEach($app.config.multiMachine.peers) { $peer in
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(spacing: 8) {
+                                Text(peer.name).font(.callout.weight(.semibold))
+                                Text(String(peer.fingerprint.prefix(12)) + "…")
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                Button {
+                                    app.config.multiMachine.peers.removeAll { $0.fingerprint == peer.fingerprint }
+                                } label: {
+                                    Image(systemName: "trash")
+                                }
+                                .buttonStyle(.borderless)
+                            }
+                            HStack(spacing: 8) {
+                                TextField("Address (host or host:port)", text: $peer.address)
+                                    .frame(maxWidth: 240)
+                                Toggle("May see my screens", isOn: $peer.allowScreens)
+                                    .toggleStyle(.checkbox)
+                                Toggle("May paste into me", isOn: $peer.allowDeliver)
+                                    .toggleStyle(.checkbox)
+                                Spacer()
+                            }
+                            .font(.caption)
+                        }
+                        .padding(.vertical, 2)
+                        if peer.fingerprint != app.config.multiMachine.peers.last?.fingerprint { Divider() }
+                    }
+                }
+                .vvCard()
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Pair a new machine").vvSectionTitle()
+                    HStack(spacing: 8) {
+                        TextField("Other machine's address (host or host:port)", text: $pairAddress)
+                            .frame(maxWidth: 280)
+                        Button("Pair…") { startPairing() }
+                            .disabled(pairAddress.trimmingCharacters(in: .whitespaces).isEmpty || pairingCode != nil)
+                        Spacer()
+                    }
+                    if let code = pairingCode {
+                        HStack(spacing: 12) {
+                            Text("\(code.prefix(3)) \(code.suffix(3))")
+                                .font(.system(size: 28, weight: .bold, design: .monospaced))
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Does the other machine show the same code?")
+                                    .font(.caption)
+                                HStack {
+                                    Button("They match — pair") { answerPairing(true) }
+                                        .controlSize(.small)
+                                    Button("Cancel") { answerPairing(false) }
+                                        .controlSize(.small)
+                                }
+                            }
+                            Spacer()
+                        }
+                        .padding(10)
+                        .background(Theme.accentSoft, in: RoundedRectangle(cornerRadius: 8))
+                    }
+                    if let status = pairingStatus {
+                        Text(status)
+                            .font(.caption)
+                            .foregroundStyle(status.hasPrefix("Paired") ? Color.green : Color.orange)
+                    }
+                    Text("VoiceVector must be running (and enabled above) on the other machine. Start pairing from either side.")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                .vvCard()
+            }
+            .padding(16)
+        }
+    }
+
+    private func startPairing() {
+        pairingStatus = nil
+        let address = pairAddress.trimmingCharacters(in: .whitespaces)
+        PeerService.shared.pair(address: address) { code, answer in
+            pairingCode = code
+            pairingAnswer = answer
+        } completion: { result in
+            pairingCode = nil
+            pairingAnswer = nil
+            switch result {
+            case .success(let peer):
+                if !app.config.multiMachine.peers.contains(where: { $0.fingerprint == peer.fingerprint }) {
+                    app.config.multiMachine.peers.append(peer)
+                }
+                pairingStatus = "Paired with \(peer.name)."
+                pairAddress = ""
+            case .failure(let error):
+                pairingStatus = "Pairing failed: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func answerPairing(_ accepted: Bool) {
+        pairingAnswer?(accepted)
+        pairingCode = nil
+        pairingAnswer = nil
+        if !accepted { pairingStatus = "Cancelled." }
+    }
+}
 
 struct GeneralSettings: View {
     @EnvironmentObject var app: AppState

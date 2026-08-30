@@ -58,6 +58,8 @@ typedef struct {
     bool review_before_paste;
     char *review_provider_id;      /* NULL = cleanup provider */
     bool screenshot_context;
+    bool router_enabled;           /* AI routing; needs review_before_paste */
+    char *router_provider_id;      /* NULL = review provider */
 } VvProfile;
 
 VvProfile *vv_profile_new(void);
@@ -73,6 +75,26 @@ typedef struct {
 } VvCleanupConfig;
 
 typedef struct { char *url; bool include_audio; bool enabled; } VvWebhook;
+
+/* A paired machine (docs/multi-machine.md). */
+typedef struct {
+    char *name;
+    char *fingerprint;    /* lowercase-hex SHA-256 of the peer's certificate (DER) */
+    char *address;        /* host or host:port; "" = inbound-only */
+    bool allow_screens;   /* peer may fetch my screens/windows */
+    bool allow_deliver;   /* peer may paste into me */
+} VvPeer;
+VvPeer *vv_peer_ref_new(void);
+void vv_peer_ref_free(VvPeer *p);
+
+/* Multi-machine peering settings (docs/multi-machine.md). */
+typedef struct {
+    bool enabled;
+    char *machine_name;   /* "" = the host name */
+    int port;
+    GPtrArray *peers;     /* VvPeer* */
+} VvMultiMachine;
+const char *vv_multi_machine_name(const VvMultiMachine *mm);
 
 typedef enum { VV_HOTKEY_BACKEND_AUTO, VV_HOTKEY_BACKEND_PORTAL, VV_HOTKEY_BACKEND_RAW } VvHotkeyBackend;
 
@@ -93,6 +115,7 @@ typedef struct {
     bool keep_mic_warm_after_recording;
     bool keep_mic_always_warm;
     VvHotkeyBackend hotkey_backend; /* Linux-only */
+    VvMultiMachine multi_machine;
 } VvConfig;
 
 VvConfig *vv_config_new(void);

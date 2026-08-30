@@ -7,6 +7,7 @@
 #include "core/providers.h"
 #include "core/log.h"
 #include "platform/services.h"
+#include "platform/peerservice.h"
 #include <string.h>
 
 typedef struct {
@@ -20,7 +21,7 @@ typedef struct {
     AdwToastOverlay *toasts;
     /* HUD */
     GtkWindow *hud;
-    GtkLabel *hud_label, *hud_clock, *hud_draft, *hud_hint;
+    GtkLabel *hud_label, *hud_clock, *hud_draft, *hud_hint, *hud_route;
     GtkWidget *hud_staging, *hud_bars_box;
     GtkWidget *bars[14];
     double levels[14];
@@ -71,6 +72,11 @@ static void hud_build(App *a) {
     gtk_widget_set_size_request(GTK_WIDGET(a->hud_draft), 480, -1);
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroll), GTK_WIDGET(a->hud_draft));
     gtk_box_append(GTK_BOX(a->hud_staging), scroll);
+    a->hud_route = GTK_LABEL(gtk_label_new(""));
+    gtk_widget_add_css_class(GTK_WIDGET(a->hud_route), "accent");
+    gtk_label_set_xalign(a->hud_route, 0);
+    gtk_widget_set_visible(GTK_WIDGET(a->hud_route), FALSE);
+    gtk_box_append(GTK_BOX(a->hud_staging), GTK_WIDGET(a->hud_route));
     a->hud_hint = GTK_LABEL(gtk_label_new(""));
     gtk_widget_add_css_class(GTK_WIDGET(a->hud_hint), "dim-label");
     gtk_label_set_xalign(a->hud_hint, 0);
@@ -114,6 +120,8 @@ static void hud_update(App *a) {
         const char *hint = recording ? "Listening for a change…" : c->state == VV_STATE_PROCESSING ? c->detail : "Press the hotkey and say a change";
         char *h = g_strdup_printf("%s      Ctrl+Alt+Enter: paste   Ctrl+Alt+Esc: discard", hint);
         gtk_label_set_text(a->hud_hint, h); g_free(h);
+        if (c->review_route) { gtk_label_set_text(a->hud_route, c->review_route); gtk_widget_set_visible(GTK_WIDGET(a->hud_route), TRUE); }
+        else gtk_widget_set_visible(GTK_WIDGET(a->hud_route), FALSE);
         gtk_widget_set_visible(a->hud_staging, TRUE);
     } else gtk_widget_set_visible(a->hud_staging, FALSE);
     if (!gtk_widget_get_visible(GTK_WIDGET(a->hud))) gtk_widget_set_visible(GTK_WIDGET(a->hud), TRUE);
@@ -272,6 +280,42 @@ static void load_css(void) {
     gtk_style_context_add_provider_for_display(gdk_display_get_default(), GTK_STYLE_PROVIDER(css), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
 }
 
+/* ---------------------------------------------- multi-machine glue */
+
+static void on_peer_deliver(const char *text, guint32 window,
+                            void (*done)(bool ok, const char *error, gpointer token),
+                            gpointer token, gpointer user) {
+    App *a = user;
+    (void)window;   /* Wayland: we can only paste into the current focus */
+    vv_controller_receive_routed(a->ctl, text, done, token);
+}
+
+typedef struct { void (*answer)(bool, gpointer); gpointer token; } IncomingPair;
+
+static void on_incoming_pair_response(AdwAlertDialog *d, const char *response, gpointer data) {
+    IncomingPair *ip = data;
+    ip->answer(g_strcmp0(response, "pair") == 0, ip->token);
+    g_free(ip);
+}
+
+static void on_peer_pair(const char *name, const char *code,
+                         void (*answer)(bool accepted, gpointer token),
+                         gpointer token, gpointer user) {
+    App *a = user;
+    char *title = g_strdup_printf("Pair with \u201c%s\u201d?", name);
+    char *body = g_strdup_printf("Confirm only if the other machine shows this code:\n\n%.3s %s", code, code + 3);
+    AdwAlertDialog *d = ADW_ALERT_DIALOG(adw_alert_dialog_new(title, body));
+    g_free(title); g_free(body);
+    adw_alert_dialog_add_responses(d, "cancel", "Cancel", "pair", "They match \u2014 pair", NULL);
+    adw_alert_dialog_set_response_appearance(d, "pair", ADW_RESPONSE_SUGGESTED);
+    adw_alert_dialog_set_close_response(d, "cancel");
+    IncomingPair *ip = g_new0(IncomingPair, 1);
+    ip->answer = answer; ip->token = token;
+    g_signal_connect(d, "response", G_CALLBACK(on_incoming_pair_response), ip);
+    if (a->window) gtk_window_present(a->window);
+    adw_dialog_present(ADW_DIALOG(d), a->window ? GTK_WIDGET(a->window) : NULL);
+}
+
 static void on_activate(GtkApplication *gapp, gpointer data) {
     App *a = data;
     if (a->window) { gtk_window_present(a->window); return; }
@@ -279,6 +323,8 @@ static void on_activate(GtkApplication *gapp, gpointer data) {
     build_window(a);
     hud_build(a);
     vv_controller_set_observer(a->ctl, on_state, a);
+    vv_peer_service_init(a->ctl->config, on_peer_deliver, on_peer_pair, a);
+    vv_peer_service_apply();
     reload_folders(a);
     reload_entries(a);
     on_state(a->ctl, a);

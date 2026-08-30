@@ -7,6 +7,7 @@
 #include "core/library.h"
 #include "core/config.h"
 #include "core/cleanup.h"
+#include "core/peer.h"
 #include "core/webhook.h"
 #include <glib/gstdio.h>
 #include <stdio.h>
@@ -353,6 +354,76 @@ static void test_cleanup(void) {
     expect(streq(wrapped, "<transcript>\nx\n</transcript>"), "cleanup: transcript wrapping"); g_free(wrapped);
     char *rm = vv_review_message("Hi", "shorter");
     expect(streq(rm, "<draft>\nHi\n</draft>\n<instruction>\nshorter\n</instruction>"), "review: message wraps draft and instruction"); g_free(rm);
+    /* multi-machine: pairing code vector (same in all three apps), frames,
+     * router verdict parsing, config round trip */
+    {
+        uint8_t fpc[32], fps[32], nc[32], ns[32];
+        gsize len = 32;
+        GChecksum *cs = g_checksum_new(G_CHECKSUM_SHA256);
+        g_checksum_update(cs, (const guchar *)"client-cert", 11);
+        g_checksum_get_digest(cs, fpc, &len); g_checksum_free(cs);
+        cs = g_checksum_new(G_CHECKSUM_SHA256); len = 32;
+        g_checksum_update(cs, (const guchar *)"server-cert", 11);
+        g_checksum_get_digest(cs, fps, &len); g_checksum_free(cs);
+        memset(nc, 1, 32); memset(ns, 2, 32);
+        char *code = vv_peer_pairing_code(fpc, fps, nc, ns);
+        expect(streq(code, "636241"), "peer: pairing code test vector");
+        g_free(code);
+        VvJson *hello = vv_json_object();
+        vv_json_object_set(hello, "t", vv_json_string("hello"));
+        GBytes *framed = vv_peer_frame(hello);
+        GByteArray *buf = g_byte_array_new();
+        gsize fn; const guint8 *fd = g_bytes_get_data(framed, &fn);
+        g_byte_array_append(buf, fd, fn);
+        guint8 junk[2] = { 9, 9 };
+        g_byte_array_append(buf, junk, 2);
+        bool bad = false;
+        VvJson *parsed = vv_peer_parse_frame(buf, &bad);
+        expect(parsed && !bad && streq(vv_json_get_string(parsed, "t", ""), "hello") && buf->len == 2,
+               "peer: frame round trip leaves trailing bytes");
+        vv_json_free(parsed);
+        expect(vv_peer_parse_frame(buf, &bad) == NULL && !bad, "peer: incomplete frame is NULL");
+        g_byte_array_unref(buf); g_bytes_unref(framed);
+        GBytes *un = vv_peer_unhex("ab01");
+        char *hx = vv_peer_hex(g_bytes_get_data(un, NULL), g_bytes_get_size(un));
+        expect(streq(hx, "ab01"), "peer: hex round trip");
+        g_free(hx); g_bytes_unref(un);
+        char *machine = NULL; guint32 window = 7;
+        expect(vv_router_parse("Sure: {\"machine\": \"tux\", \"window\": 42}", &machine, &window)
+               && streq(machine, "tux") && window == 42, "router: verdict parsed out of prose");
+        g_free(machine);
+        expect(vv_router_parse("{\"machine\":\"m\"}", &machine, &window) && window == 0,
+               "router: missing window is 0");
+        g_free(machine);
+        expect(!vv_router_parse("no json here", &machine, &window), "router: garbage is false");
+        GPtrArray *ms = g_ptr_array_new_with_free_func((GDestroyNotify)vv_router_machine_free);
+        g_ptr_array_add(ms, vv_router_machine_new("tux", true, "1: A — B"));
+        char *rm2 = vv_router_message("hi", ms);
+        expect(strstr(rm2, "<draft>\nhi\n</draft>") && strstr(rm2, "(current: the user dictated here)"),
+               "router: message shape");
+        g_free(rm2); g_ptr_array_unref(ms);
+        VvJson *mmj = vv_json_parse("{\"multiMachine\":{\"peers\":[{\"name\":\"x\",\"fingerprint\":\"ab\"}]}}", NULL);
+        VvConfig *mc = vv_config_from_json(mmj);
+        expect(!mc->multi_machine.enabled && mc->multi_machine.port == 47800
+               && mc->multi_machine.peers->len == 1
+               && streq(((VvPeer *)g_ptr_array_index(mc->multi_machine.peers, 0))->name, "x")
+               && !((VvPeer *)g_ptr_array_index(mc->multi_machine.peers, 0))->allow_deliver,
+               "peer: tolerant config decoding");
+        VvJson *back = vv_config_to_json(mc);
+        VvConfig *mc2 = vv_config_from_json(back);
+        expect(mc2->multi_machine.peers->len == 1
+               && streq(((VvPeer *)g_ptr_array_index(mc2->multi_machine.peers, 0))->fingerprint, "ab"),
+               "peer: config round trip");
+        vv_json_free(back); vv_json_free(mmj); vv_config_free(mc); vv_config_free(mc2);
+        VvProfile *rprof = vv_profile_new();
+        rprof->router_enabled = true; rprof->router_provider_id = vv_uuid_new();
+        VvJson *rpj = vv_profile_to_json(rprof);
+        VvProfile *rp2 = vv_profile_from_json(rpj);
+        expect(rp2->router_enabled && streq(rp2->router_provider_id, rprof->router_provider_id),
+               "router: profile options round trip");
+        vv_profile_free(rp2); vv_json_free(rpj); vv_profile_free(rprof);
+    }
+
     char *cap = vv_screenshot_caption(1, 2, true, true, true);
     expect(streq(cap, "Display 1 of 2 — ACTIVE: the dictated text will be inserted here; the target window is outlined in red."), "screenshot: active caption"); g_free(cap);
     cap = vv_screenshot_caption(2, 2, true, false, false);
@@ -370,6 +441,9 @@ static void test_cleanup(void) {
     }
     if (dir) {
         char *rich = read_prompt(dir, "cleanup-rich.txt"), *light = read_prompt(dir, "cleanup-light.txt"), *rev = read_prompt(dir, "review.txt");
+        char *rtr = read_prompt(dir, "router.txt");
+        expect(streq(rtr, vv_router_prompt()), "router: prompt matches shared/prompts");
+        g_free(rtr);
         expect(streq(rich, vv_cleanup_default_prompt(VV_CLEANUP_RICH)), "cleanup: rich prompt matches shared/prompts");
         expect(streq(light, vv_cleanup_default_prompt(VV_CLEANUP_LIGHT)), "cleanup: light prompt matches shared/prompts");
         expect(streq(rev, vv_review_prompt()), "review: prompt matches shared/prompts");

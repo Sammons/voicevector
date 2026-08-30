@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import CryptoKit
 
 /// Built-in test suite (`VoiceVector --self-test`) covering the pure logic.
 /// Command Line Tools ship no XCTest, so the app carries its own tiny harness
@@ -217,6 +218,10 @@ enum SelfTest {
             expect(file.trimmingCharacters(in: .whitespacesAndNewlines)
                    == CleanupEngine.reviewPrompt.trimmingCharacters(in: .whitespacesAndNewlines),
                    "review: prompt matches shared/prompts/review.txt")
+            let router = (try? String(contentsOfFile: dir + "/router.txt", encoding: .utf8)) ?? ""
+            expect(router.trimmingCharacters(in: .whitespacesAndNewlines)
+                   == CleanupEngine.routerPrompt.trimmingCharacters(in: .whitespacesAndNewlines),
+                   "router: prompt matches shared/prompts/router.txt")
             let rich = (try? String(contentsOfFile: dir + "/cleanup-rich.txt", encoding: .utf8)) ?? ""
             expect(rich.trimmingCharacters(in: .whitespacesAndNewlines)
                    == CleanupEngine.defaultPrompt(mode: .rich).trimmingCharacters(in: .whitespacesAndNewlines),
@@ -238,6 +243,51 @@ enum SelfTest {
         let names = (UInt16(0)...UInt16(127)).map { HotkeyEngine.keyName($0) }
         expect(names.count == 128 && names.contains("F20") && !names.contains(""),
                "hotkey: keyName total over all key codes")
+        // Multi-machine: pairing code vector (same in all three apps), frames,
+        // identity certificate, router verdict parsing.
+        let fpC = Data(SHA256.hash(data: Data("client-cert".utf8)))
+        let fpS = Data(SHA256.hash(data: Data("server-cert".utf8)))
+        expect(PeerCrypto.pairingCode(fpClient: fpC, fpServer: fpS,
+                                      nonceClient: Data(repeating: 1, count: 32),
+                                      nonceServer: Data(repeating: 2, count: 32)) == "636241",
+               "peer: pairing code test vector")
+        if let framed = PeerCrypto.frame(["t": "hello", "name": "mac"]),
+           let parsed = PeerCrypto.parseFrame(framed + Data([9, 9])) {
+            expect(parsed.object["t"] as? String == "hello" && parsed.consumed == framed.count,
+                   "peer: frame round trip leaves trailing bytes")
+        } else {
+            expect(false, "peer: frame round trip")
+        }
+        expect(PeerCrypto.parseFrame(Data([0, 0])) == nil, "peer: incomplete frame is nil")
+        expect(Data(hexString: Data([0xAB, 0x01]).hexString) == Data([0xAB, 0x01]), "peer: hex round trip")
+        let keyAttributes: [String: Any] = [kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
+                                            kSecAttrKeySizeInBits as String: 256]
+        if let key = SecKeyCreateRandomKey(keyAttributes as CFDictionary, nil),
+           let der = PeerCrypto.makeSelfSignedCertificate(key: key, commonName: "VoiceVector-test"),
+           let cert = SecCertificateCreateWithData(nil, der as CFData) {
+            let summary = SecCertificateCopySubjectSummary(cert) as String? ?? ""
+            expect(summary == "VoiceVector-test", "peer: self-signed certificate parses with CN")
+            expect(PeerCrypto.fingerprint(of: der).count == 32, "peer: certificate fingerprint")
+        } else {
+            expect(false, "peer: self-signed certificate creation")
+        }
+        expect(CleanupEngine.parseRouterVerdict("Sure: {\"machine\": \"mac\", \"window\": 42}")
+               == CleanupEngine.RouterVerdict(machine: "mac", window: 42),
+               "router: verdict parsed out of prose")
+        expect(CleanupEngine.parseRouterVerdict("{\"machine\":\"m\"}")
+               == CleanupEngine.RouterVerdict(machine: "m", window: 0), "router: missing window is 0")
+        expect(CleanupEngine.parseRouterVerdict("no json here") == nil, "router: garbage is nil")
+        let routerMsg = CleanupEngine.routerMessage(draft: "hi", machines: [("mac", true, "1: A — B")])
+        expect(routerMsg.contains("<draft>\nhi\n</draft>") && routerMsg.contains("(current: the user dictated here)"),
+               "router: message shape")
+        if let mmData = "{\"peers\":[{\"name\":\"x\",\"fingerprint\":\"ab\"}]}".data(using: .utf8),
+           let mm = try? JSONDecoder().decode(MultiMachineConfig.self, from: mmData) {
+            expect(mm.enabled == false && mm.port == 47800 && mm.peers.first?.allowDeliver == false
+                   && mm.peers.first?.name == "x", "peer: tolerant config decoding")
+        } else {
+            expect(false, "peer: tolerant config decoding")
+        }
+
         expect(!HotkeySpec.unset.isSet && HotkeySpec.default.isSet
                && HotkeySpec(keyCode: 0, modifiers: CGEventFlags.maskCommand.rawValue, isModifierOnly: false).isSet,
                "hotkey: unset placeholder is never a binding (key code 0 is the letter A)")

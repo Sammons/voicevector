@@ -1,10 +1,11 @@
-/* Settings dialog: Providers · Dictation · Folders · General · About. */
+/* Settings dialog: Providers · Dictation · Folders · General · Multi-machine · About. */
 #include <adwaita.h>
 #include "ui/controller.h"
 #include "core/cleanup.h"
 #include "core/providers.h"
 #include "core/log.h"
 #include "platform/services.h"
+#include "platform/peerservice.h"
 #include <string.h>
 
 VvController *vv_app_controller(void);
@@ -13,7 +14,7 @@ void vv_app_toast(const char *text);
 
 static AdwPreferencesDialog *dialog;
 static GtkWindow *dialog_parent;
-static AdwPreferencesPage *current_pages[5];
+static AdwPreferencesPage *current_pages[6];
 
 static void save(void) { vv_controller_save_config(vv_app_controller()); vv_app_refresh(); }
 static void rebuild(void);
@@ -178,7 +179,8 @@ static AdwPreferencesPage *page_providers(void) {
 
 /* ---------------------------------------------------- dictation */
 
-typedef struct { VvProfile *p; GPtrArray *stt_ids, *chat_ids, *review_ids; GtkWidget *hotkey_button; } ProfileUi;
+typedef struct { VvProfile *p; GPtrArray *stt_ids, *chat_ids, *review_ids; GtkWidget *hotkey_button;     GPtrArray *router_ids;
+} ProfileUi;
 
 static void on_stt_default(GObject *row, GParamSpec *ps, gpointer ids) {
     VvConfig *c = vv_app_controller()->config;
@@ -199,6 +201,14 @@ static void on_profile_prompt(GtkTextBuffer *b, gpointer d) {
 }
 static void on_profile_review(GObject *row, GParamSpec *ps, gpointer d) { ProfileUi *u = d; u->p->review_before_paste = adw_switch_row_get_active(ADW_SWITCH_ROW(row)); save(); rebuild(); }
 static void on_profile_screenshot(GObject *row, GParamSpec *ps, gpointer d) { ProfileUi *u = d; u->p->screenshot_context = adw_switch_row_get_active(ADW_SWITCH_ROW(row)); save(); }
+static void on_profile_router(GObject *row, GParamSpec *ps, gpointer d) { ProfileUi *u = d; u->p->router_enabled = adw_switch_row_get_active(ADW_SWITCH_ROW(row)); save(); rebuild(); }
+static void on_profile_router_provider(GObject *row, GParamSpec *ps, gpointer d) {
+    ProfileUi *u = d;
+    guint sel = adw_combo_row_get_selected(ADW_COMBO_ROW(row));
+    g_free(u->p->router_provider_id);
+    u->p->router_provider_id = sel == 0 || sel > u->router_ids->len ? NULL : g_strdup(g_ptr_array_index(u->router_ids, sel - 1));
+    save();
+}
 static void on_profile_remove(GtkButton *b, gpointer d) {
     ProfileUi *u = d; VvConfig *c = vv_app_controller()->config;
     if (c->profiles->len <= 1) return;
@@ -318,6 +328,13 @@ static AdwPreferencesPage *page_dictation(void) {
         if (p->review_before_paste) {
             GtkStringList *reviewers = provider_items("Same as cleanup", is_chat, &u->review_ids);
             adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), combo_row("Review model", reviewers, index_of(u->review_ids, p->review_provider_id), on_profile_review_provider, u));
+        }
+        if (p->review_before_paste) {
+            adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), switch_row("Route with AI", "A router model looks at your screens and paired machines and picks where the draft should go; the staging card shows its choice.", p->router_enabled, on_profile_router, u));
+            if (p->router_enabled) {
+                GtkStringList *routers = provider_items("Same as review", is_chat, &u->router_ids);
+                adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), combo_row("Router model", routers, index_of(u->router_ids, p->router_provider_id), on_profile_router_provider, u));
+            }
         }
         adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), switch_row("Screenshot context", "Attach a screenshot of every display (Screenshot portal) to cleanup and review calls. Models without vision ignore it.", p->screenshot_context, on_profile_screenshot, u));
         adw_preferences_page_add(page, ADW_PREFERENCES_GROUP(group));
@@ -504,18 +521,186 @@ static AdwPreferencesPage *page_about(void) {
     return page;
 }
 
+/* --------------------------------------------- multi-machine page */
+
+static GtkWidget *pair_status_label;
+static GtkWidget *pair_address_row;
+
+static void on_mm_enabled(GObject *row, GParamSpec *ps, gpointer d) {
+    VvConfig *c = vv_app_controller()->config;
+    c->multi_machine.enabled = adw_switch_row_get_active(ADW_SWITCH_ROW(row));
+    save();
+    vv_peer_service_apply();
+    rebuild();
+}
+
+static void on_mm_name(GtkEditable *e, gpointer d) {
+    VvConfig *c = vv_app_controller()->config;
+    g_free(c->multi_machine.machine_name);
+    c->multi_machine.machine_name = g_strdup(gtk_editable_get_text(e));
+    save();
+}
+
+static void on_mm_port(GtkEditable *e, gpointer d) {
+    VvConfig *c = vv_app_controller()->config;
+    int port = atoi(gtk_editable_get_text(e));
+    if (port > 0 && port < 65536) { c->multi_machine.port = port; save(); vv_peer_service_apply(); }
+}
+
+static void on_peer_address(GtkEditable *e, gpointer d) {
+    VvPeer *p = d;
+    g_free(p->address); p->address = g_strdup(gtk_editable_get_text(e));
+    save();
+}
+
+static void on_peer_screens(GObject *row, GParamSpec *ps, gpointer d) { VvPeer *p = d; p->allow_screens = adw_switch_row_get_active(ADW_SWITCH_ROW(row)); save(); }
+static void on_peer_deliver(GObject *row, GParamSpec *ps, gpointer d) { VvPeer *p = d; p->allow_deliver = adw_switch_row_get_active(ADW_SWITCH_ROW(row)); save(); }
+
+static void on_peer_remove(GtkButton *b, gpointer d) {
+    VvPeer *p = d;
+    VvConfig *c = vv_app_controller()->config;
+    g_ptr_array_remove(c->multi_machine.peers, p);
+    save();
+    rebuild();
+}
+
+static void pair_set_status(const char *text) {
+    if (pair_status_label) gtk_label_set_text(GTK_LABEL(pair_status_label), text);
+}
+
+typedef struct { void (*answer)(bool, gpointer); gpointer token; } PairAnswer;
+
+static void on_pair_dialog_response(AdwAlertDialog *d, const char *response, gpointer data) {
+    PairAnswer *pa = data;
+    pa->answer(g_strcmp0(response, "pair") == 0, pa->token);
+    g_free(pa);
+}
+
+static void show_pair_code_dialog(const char *title, const char *code,
+                                  void (*answer)(bool, gpointer), gpointer token) {
+    char *body = g_strdup_printf("Confirm only if the other machine shows this code:\n\n%.3s %s", code, code + 3);
+    AdwAlertDialog *d = ADW_ALERT_DIALOG(adw_alert_dialog_new(title, body));
+    g_free(body);
+    adw_alert_dialog_add_responses(d, "cancel", "Cancel", "pair", "They match — pair", NULL);
+    adw_alert_dialog_set_response_appearance(d, "pair", ADW_RESPONSE_SUGGESTED);
+    adw_alert_dialog_set_default_response(d, "pair");
+    adw_alert_dialog_set_close_response(d, "cancel");
+    PairAnswer *pa = g_new0(PairAnswer, 1);
+    pa->answer = answer; pa->token = token;
+    g_signal_connect(d, "response", G_CALLBACK(on_pair_dialog_response), pa);
+    GtkWindow *parent = dialog_parent;
+    adw_dialog_present(ADW_DIALOG(d), parent ? GTK_WIDGET(parent) : NULL);
+}
+
+static void on_pair_code(const char *code, void (*answer)(bool, gpointer), gpointer token, gpointer user) {
+    show_pair_code_dialog("Pair machines?", code, answer, token);
+}
+
+static void on_pair_done(VvPeer *peer, const char *error, gpointer user) {
+    VvConfig *c = vv_app_controller()->config;
+    if (peer) {
+        bool known = false;
+        for (guint i = 0; i < c->multi_machine.peers->len; i++)
+            if (g_strcmp0(((VvPeer *)g_ptr_array_index(c->multi_machine.peers, i))->fingerprint, peer->fingerprint) == 0) known = true;
+        if (known) vv_peer_ref_free(peer);
+        else { g_ptr_array_add(c->multi_machine.peers, peer); save(); }
+        char *m = g_strdup_printf("Paired with %s.", peer->name);
+        pair_set_status(m); g_free(m);
+        rebuild();
+    } else {
+        char *m = g_strdup_printf("Pairing failed: %s", error ? error : "unknown error");
+        pair_set_status(m); g_free(m);
+    }
+}
+
+static void on_pair_clicked(GtkButton *b, gpointer d) {
+    const char *address = gtk_editable_get_text(GTK_EDITABLE(pair_address_row));
+    if (!address || !*address) return;
+    pair_set_status("Connecting…");
+    vv_peer_service_pair_async(address, on_pair_code, on_pair_done, NULL);
+}
+
+static AdwPreferencesPage *page_multimachine(void) {
+    VvConfig *c = vv_app_controller()->config;
+    VvMultiMachine *mm = &c->multi_machine;
+    AdwPreferencesPage *page = ADW_PREFERENCES_PAGE(adw_preferences_page_new());
+    adw_preferences_page_set_title(page, "Multi-machine");
+    adw_preferences_page_set_icon_name(page, "network-workgroup-symbolic");
+
+    GtkWidget *self_group = adw_preferences_group_new();
+    adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(self_group), "This machine");
+    adw_preferences_group_set_description(ADW_PREFERENCES_GROUP(self_group),
+        "Machines pair once with a 6-digit code confirmed on both screens, then talk over TLS with pinned identities. Use tailnet or LAN addresses only.");
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(self_group), switch_row("Allow paired machines to connect", NULL, mm->enabled, on_mm_enabled, NULL));
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(self_group), entry_row("Machine name (blank = host name)", mm->machine_name, on_mm_name, NULL));
+    char port[16]; g_snprintf(port, sizeof port, "%d", mm->port);
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(self_group), entry_row("Port", port, on_mm_port, NULL));
+    if (mm->enabled) {
+        char *fp = vv_peer_service_fingerprint_hex();
+        GtkWidget *row = adw_action_row_new();
+        adw_preferences_row_set_title(ADW_PREFERENCES_ROW(row), "Identity");
+        char *sub = fp ? g_strdup_printf("%.16s…", fp) : g_strdup("created when the listener starts");
+        adw_action_row_set_subtitle(ADW_ACTION_ROW(row), sub);
+        g_free(sub); g_free(fp);
+        adw_preferences_group_add(ADW_PREFERENCES_GROUP(self_group), row);
+    }
+    adw_preferences_page_add(page, ADW_PREFERENCES_GROUP(self_group));
+
+    GtkWidget *peers = adw_preferences_group_new();
+    adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(peers), "Paired machines");
+    if (mm->peers->len == 0)
+        adw_preferences_group_set_description(ADW_PREFERENCES_GROUP(peers), "No machines paired yet.");
+    for (guint i = 0; i < mm->peers->len; i++) {
+        VvPeer *p = g_ptr_array_index(mm->peers, i);
+        GtkWidget *head = adw_action_row_new();
+        adw_preferences_row_set_title(ADW_PREFERENCES_ROW(head), *p->name ? p->name : "(unnamed)");
+        char *sub = g_strdup_printf("%.12s…", p->fingerprint);
+        adw_action_row_set_subtitle(ADW_ACTION_ROW(head), sub);
+        g_free(sub);
+        GtkWidget *remove = gtk_button_new_from_icon_name("user-trash-symbolic");
+        gtk_widget_add_css_class(remove, "flat");
+        gtk_widget_set_valign(remove, GTK_ALIGN_CENTER);
+        g_signal_connect(remove, "clicked", G_CALLBACK(on_peer_remove), p);
+        adw_action_row_add_suffix(ADW_ACTION_ROW(head), remove);
+        adw_preferences_group_add(ADW_PREFERENCES_GROUP(peers), head);
+        adw_preferences_group_add(ADW_PREFERENCES_GROUP(peers), entry_row("Address (host or host:port)", p->address, on_peer_address, p));
+        adw_preferences_group_add(ADW_PREFERENCES_GROUP(peers), switch_row("May see my screens", NULL, p->allow_screens, on_peer_screens, p));
+        adw_preferences_group_add(ADW_PREFERENCES_GROUP(peers), switch_row("May paste into me", NULL, p->allow_deliver, on_peer_deliver, p));
+    }
+    adw_preferences_page_add(page, ADW_PREFERENCES_GROUP(peers));
+
+    GtkWidget *pair = adw_preferences_group_new();
+    adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(pair), "Pair a new machine");
+    adw_preferences_group_set_description(ADW_PREFERENCES_GROUP(pair),
+        "VoiceVector must be running (and enabled above) on the other machine. Start pairing from either side.");
+    pair_address_row = entry_row("Other machine's address (host or host:port)", "", NULL, NULL);
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(pair), pair_address_row);
+    GtkWidget *actions = adw_action_row_new();
+    adw_preferences_row_set_title(ADW_PREFERENCES_ROW(actions), "Pair");
+    GtkWidget *go = gtk_button_new_with_label("Pair…");
+    gtk_widget_set_valign(go, GTK_ALIGN_CENTER);
+    g_signal_connect(go, "clicked", G_CALLBACK(on_pair_clicked), NULL);
+    adw_action_row_add_suffix(ADW_ACTION_ROW(actions), go);
+    pair_status_label = gtk_label_new("");
+    gtk_widget_add_css_class(pair_status_label, "dim-label");
+    adw_action_row_add_suffix(ADW_ACTION_ROW(actions), pair_status_label);
+    adw_preferences_group_add(ADW_PREFERENCES_GROUP(pair), actions);
+    adw_preferences_page_add(page, ADW_PREFERENCES_GROUP(pair));
+    return page;
+}
+
 /* -------------------------------------------------------- dialog */
 
-static void on_closed(AdwDialog *d, gpointer data) { dialog = NULL; for (int i = 0; i < 5; i++) current_pages[i] = NULL; }
+static void on_closed(AdwDialog *d, gpointer data) { dialog = NULL; for (int i = 0; i < 6; i++) current_pages[i] = NULL; }
 
 static void rebuild(void) {
     if (!dialog) return;
     const char *current = adw_preferences_dialog_get_visible_page_name(dialog);
     char *keep = g_strdup(current ? current : "");
-    AdwPreferencesPage *pages[] = { page_providers(), page_dictation(), page_folders(), page_general(), page_about() };
-    const char *names[] = { "providers", "dictation", "folders", "general", "about" };
-    for (int i = 0; i < 5; i++) if (current_pages[i]) { adw_preferences_dialog_remove(dialog, current_pages[i]); current_pages[i] = NULL; }
-    for (int i = 0; i < 5; i++) { adw_preferences_page_set_name(pages[i], names[i]); adw_preferences_dialog_add(dialog, pages[i]); current_pages[i] = pages[i]; }
+    AdwPreferencesPage *pages[] = { page_providers(), page_dictation(), page_folders(), page_general(), page_multimachine(), page_about() };
+    const char *names[] = { "providers", "dictation", "folders", "general", "multimachine", "about" };
+    for (int i = 0; i < 6; i++) if (current_pages[i]) { adw_preferences_dialog_remove(dialog, current_pages[i]); current_pages[i] = NULL; }
+    for (int i = 0; i < 6; i++) { adw_preferences_page_set_name(pages[i], names[i]); adw_preferences_dialog_add(dialog, pages[i]); current_pages[i] = pages[i]; }
     if (*keep) adw_preferences_dialog_set_visible_page_name(dialog, keep);
     g_free(keep);
 }

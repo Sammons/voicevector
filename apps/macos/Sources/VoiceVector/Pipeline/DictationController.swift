@@ -24,6 +24,14 @@ final class DictationController: ObservableObject {
     }
 
     /// A staged dictation awaiting spoken revisions / ⏎ / Esc.
+    /// Where the router decided the draft should go.
+    struct RouteTarget {
+        var machine: String
+        var window: UInt32          // 0 = whatever is focused there
+        var peer: PeerRef?          // nil = this machine
+        var label: String           // "Slack — #general on crankshaft"
+    }
+
     struct ReviewSession {
         var entry: Entry
         var slot: (id: String, audioURL: URL, folder: String)
@@ -31,6 +39,7 @@ final class DictationController: ObservableObject {
         var profile: DictationProfile?
         var policy: CleanupEngine.EffectiveCleanup
         var screenshots: ScreenshotSet?
+        var routeTarget: RouteTarget?
         var revisions = 0
     }
 
@@ -43,6 +52,10 @@ final class DictationController: ObservableObject {
     /// Screenshots (one per display) taken when the hotkey fired, for
     /// cleanup/review context; saved beside the entry so a retry reuses them.
     private var pendingScreenshots: ScreenshotSet?
+    /// Window list captured when the hotkey fired (router hotkeys only).
+    private var pendingWindows: [WindowInfo] = []
+    /// Router verdict shown in the staging card ("→ Slack on crankshaft").
+    @Published var reviewRoute: String?
     /// Bumped whenever an entry is added/updated so list views reload.
     @Published private(set) var libraryGeneration = 0
     /// Mic level passthrough for the HUD.
@@ -114,6 +127,11 @@ final class DictationController: ObservableObject {
            profile.screenshotContext {
             pendingScreenshots = ScreenCapture.allScreens()
             library.saveScreenshots(id: slot.id, folder: folder, pendingScreenshots)
+        }
+        pendingWindows = []
+        if let profile = configStore.config.dictationProfiles.first(where: { $0.id == activeProfileID }),
+           profile.routerEnabled, profile.reviewBeforePaste {
+            pendingWindows = WindowInventory.list()
         }
 
         // Arm silence-gap streaming: completed phrases transcribe in the
@@ -213,7 +231,90 @@ final class DictationController: ObservableObject {
         review = ReviewSession(entry: entry, slot: slot, config: config, profile: profile,
                                policy: policy, screenshots: pendingScreenshots)
         reviewDraft = entry.cleaned
+        reviewRoute = nil
         state = .reviewing
+        if profile?.routerEnabled == true {
+            reviewRoute = "Routing…"
+            Task { await self.runRouter() }
+        }
+    }
+
+    // MARK: AI routing (docs/multi-machine.md)
+
+    /// The router model: the profile's choice, else the review provider.
+    private func routerProvider(for session: ReviewSession) -> ProviderProfile? {
+        if let id = session.profile?.routerProviderID,
+           let p = session.config.providers.first(where: { $0.id == id }) { return p }
+        return reviewProvider(for: session)
+    }
+
+    /// Gathers local + peer contexts, asks the router, stores the verdict.
+    private func runRouter() async {
+        guard let session = review, let draft = reviewDraft,
+              let provider = routerProvider(for: session) else { reviewRoute = nil; return }
+        let mm = session.config.multiMachine
+        let machineName = mm.resolvedMachineName
+        let local = PeerService.localContext(machineName: machineName, windows: pendingWindows,
+                                             screens: pendingScreenshots)
+        var contexts = [local]
+        let peers = mm.peers.filter { !$0.address.isEmpty }
+        if !peers.isEmpty {
+            contexts += await withTaskGroup(of: MachineContext?.self) { group in
+                for peer in peers {
+                    group.addTask {
+                        await withCheckedContinuation { done in
+                            PeerService.shared.fetchContext(peer: peer) { done.resume(returning: $0) }
+                        }
+                    }
+                }
+                var found: [MachineContext] = []
+                for await context in group { if let context { found.append(context) } }
+                return found
+            }
+        }
+        guard review != nil else { return }   // review ended while gathering
+        let message = CleanupEngine.routerMessage(
+            draft: draft, machines: contexts.map { ($0.machine, $0.isLocal, $0.windowLines) })
+        let images = contexts.flatMap(\.screens)
+        do {
+            let client = ProviderClient(profile: provider)
+            let reply: String
+            do { reply = try await client.chat(system: CleanupEngine.routerPrompt, user: message, images: images) }
+            catch { reply = try await client.chat(system: CleanupEngine.routerPrompt, user: message) }
+            guard let verdict = CleanupEngine.parseRouterVerdict(reply), review != nil else {
+                reviewRoute = nil; return
+            }
+            apply(verdict: verdict, contexts: contexts, machineName: machineName, peers: peers)
+        } catch {
+            Log.error("Router failed: \(error.localizedDescription)")
+            reviewRoute = nil
+        }
+    }
+
+    private func apply(verdict: CleanupEngine.RouterVerdict, contexts: [MachineContext],
+                       machineName: String, peers: [PeerRef]) {
+        guard let context = contexts.first(where: { $0.machine == verdict.machine }) else {
+            reviewRoute = nil; return
+        }
+        let window = context.windows.first(where: { $0.id == verdict.window })
+        let windowLabel = window.map { $0.title.isEmpty ? $0.app : "\($0.app) — \($0.title)" }
+        if context.isLocal {
+            if let window, let windowLabel {
+                review?.routeTarget = RouteTarget(machine: machineName, window: window.id,
+                                                  peer: nil, label: windowLabel)
+                reviewRoute = "→ " + windowLabel
+            } else {
+                review?.routeTarget = nil
+                reviewRoute = nil     // focused window — the normal paste
+            }
+        } else if let peer = peers.first(where: { $0.name == context.machine }) {
+            let label = (windowLabel.map { "\($0) on " } ?? "") + context.machine
+            review?.routeTarget = RouteTarget(machine: context.machine,
+                                              window: window?.id ?? 0, peer: peer, label: label)
+            reviewRoute = "→ " + label
+        } else {
+            reviewRoute = nil
+        }
     }
 
     /// The reviewer model: the profile's choice, else the cleanup provider.
@@ -292,21 +393,85 @@ final class DictationController: ObservableObject {
         state = .reviewing
     }
 
-    /// ⏎ while reviewing: save the draft and paste it.
+    /// ⏎ while reviewing: save the draft and paste it (where the router said).
     func acceptReview() {
         guard state == .reviewing, var session = review, let draft = reviewDraft else { return }
         review = nil
         reviewDraft = nil
+        reviewRoute = nil
         session.entry.cleaned = draft
+        if let target = session.routeTarget {
+            session.entry.cleanupLabel += " · routed to \(target.label)"
+        }
         library.save(session.entry)
         libraryGeneration += 1
-        Task { await self.deliver(entry: session.entry, slot: session.slot, config: session.config) }
+        let routed = session
+        Task { await self.deliverRouted(session: routed) }
+    }
+
+    private func deliverRouted(session: ReviewSession) async {
+        guard let target = session.routeTarget else {
+            await deliver(entry: session.entry, slot: session.slot, config: session.config)
+            return
+        }
+        if let peer = target.peer {
+            state = .processing("Sending to \(target.machine)…")
+            let text = session.entry.cleaned
+            let error: String? = await withCheckedContinuation { done in
+                PeerService.shared.deliver(text: text, window: target.window, peer: peer) { done.resume(returning: $0) }
+            }
+            if let error {
+                notify(title: "Could not deliver to \(target.machine)", body: error + " — pasting here instead.")
+                await deliver(entry: session.entry, slot: session.slot, config: session.config)
+            } else {
+                finish(with: .idle)
+                if let webhook = session.config.folderWebhooks[session.slot.folder], webhook.enabled {
+                    let finished = session.entry
+                    let audioURL = session.slot.audioURL
+                    Task.detached { await WebhookSender.send(entry: finished, audioURL: audioURL, config: webhook) }
+                }
+            }
+        } else {
+            state = .processing("Pasting…")
+            if !WindowInventory.activate(windowID: target.window) {
+                notify(title: "Window is gone", body: "Pasting into the focused window instead.")
+            }
+            try? await Task.sleep(nanoseconds: 350_000_000)   // let focus settle
+            await deliver(entry: session.entry, slot: session.slot, config: session.config)
+        }
+    }
+
+    /// Inbound routed text from a paired machine: activate the window (when
+    /// we know it), paste, and save a routed entry to the library.
+    func receiveRoutedText(_ text: String, window: UInt32, from machine: String,
+                           completion: @escaping (Bool, String) -> Void) {
+        guard !state.isBusy else { completion(false, "busy dictating"); return }
+        Task {
+            if window != 0 { _ = WindowInventory.activate(windowID: window) }
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            let config = self.configStore.config
+            let outcome = await self.paste.insert(text, autoPaste: config.autoPaste,
+                                                  preferAppleScript: config.appleScriptPaste)
+            let folder = config.activeFolder
+            let slot = self.library.newEntrySlot(folder: folder)
+            var entry = Entry(id: slot.id, folder: folder, date: Date(), duration: 0,
+                              sttLabel: "routed from \(machine)", cleanupLabel: "",
+                              status: "complete", cleaned: text, raw: text)
+            if case .copiedOnly(let reason) = outcome {
+                entry.status = "complete (copied only)"
+                self.notify(title: "Text from \(machine) copied", body: "\(reason). Press ⌘V to insert it.")
+            }
+            self.library.save(entry)
+            self.libraryGeneration += 1
+            completion(true, "")
+        }
     }
 
     /// Esc while reviewing: keep the entry (with the draft) but don't paste.
     func discardReview() {
         guard state == .reviewing, var session = review else { return }
         review = nil
+        reviewRoute = nil
         let draft = reviewDraft
         reviewDraft = nil
         if let draft { session.entry.cleaned = draft }

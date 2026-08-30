@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using VoiceVector.Shared;
@@ -58,6 +59,29 @@ namespace VoiceVector.Win
                     Hook.Start();
                     if (Environment.GetEnvironmentVariable("VV_FAKE_AUDIO") == null)
                         Dictation.ApplyWarmPolicy();
+                    var peers = PeerService.Shared;
+                    peers.ConfigProvider = () => Config.MultiMachine;
+                    peers.RunOnUi = a => app.Dispatcher.BeginInvoke(a);
+                    peers.AddPeer = peer =>
+                    {
+                        if (!Config.MultiMachine.Peers.Any(p => p.Fingerprint == peer.Fingerprint))
+                        {
+                            Config.MultiMachine.Peers.Add(peer);
+                            Config.Save();
+                        }
+                    };
+                    peers.OnDeliver = (text, window, done) =>
+                        Dictation.ReceiveRoutedText(text, window, "a paired machine", done);
+                    peers.OnIncomingPair = (name, code, answer) =>
+                    {
+                        var result = System.Windows.MessageBox.Show(
+                            "Pair with \"" + name + "\"?\n\nConfirm only if the other machine shows this code:\n\n"
+                            + code.Substring(0, 3) + " " + code.Substring(3),
+                            "VoiceVector pairing", System.Windows.MessageBoxButton.YesNo,
+                            System.Windows.MessageBoxImage.Question);
+                        answer(result == System.Windows.MessageBoxResult.Yes);
+                    };
+                    peers.ApplyConfig();
                     Diag.Breadcrumb("services up");
 
                     MainWin = new MainWindow();

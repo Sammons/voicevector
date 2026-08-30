@@ -2,6 +2,11 @@
 
 The Linux app (`apps/linux/`) is C on GTK 4 / libadwaita, dynamically linked
 against libraries every desktop ships: GLib/GIO, libcurl, libsecret, libpulse.
+Multi-machine peering additionally needs `glib-networking` (GIO's TLS backend —
+preinstalled on GNOME desktops) at runtime, and the `openssl` CLI once, to
+generate the machine's identity certificate. Wayland hides other apps'
+windows, so this machine offers its screens to the AI router and receives
+routed text into the focused window, without per-window targeting.
 It targets Wayland desktops (GNOME 50 on Ubuntu 26.04 is the reference) and
 works on X11 sessions through the same portals.
 

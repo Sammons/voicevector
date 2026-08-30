@@ -128,10 +128,16 @@ struct DictationProfile: Codable, Equatable, Identifiable {
     /// Attach a screenshot of the frontmost window to cleanup and review
     /// calls as context. Needs Screen Recording permission.
     var screenshotContext: Bool = false
+    /// AI routing: a router model picks the destination window/machine for
+    /// the staged draft. Only acts when `reviewBeforePaste` is on.
+    var routerEnabled: Bool = false
+    /// nil = use the review provider for routing.
+    var routerProviderID: UUID?
 
     enum CodingKeys: String, CodingKey {
         case id, name, hotkey, cleanupEnabled, cleanupMode, cleanupProviderID, customPrompt
         case sttProviderID, vocabulary, reviewBeforePaste, reviewProviderID, screenshotContext
+        case routerEnabled, routerProviderID
     }
 
     init() {}
@@ -157,6 +163,8 @@ struct DictationProfile: Codable, Equatable, Identifiable {
         reviewBeforePaste = try c.decodeIfPresent(Bool.self, forKey: .reviewBeforePaste) ?? false
         reviewProviderID = try c.decodeIfPresent(UUID.self, forKey: .reviewProviderID)
         screenshotContext = try c.decodeIfPresent(Bool.self, forKey: .screenshotContext) ?? false
+        routerEnabled = try c.decodeIfPresent(Bool.self, forKey: .routerEnabled) ?? false
+        routerProviderID = try c.decodeIfPresent(UUID.self, forKey: .routerProviderID)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -173,6 +181,8 @@ struct DictationProfile: Codable, Equatable, Identifiable {
         try c.encode(reviewBeforePaste, forKey: .reviewBeforePaste)
         try c.encodeIfPresent(reviewProviderID, forKey: .reviewProviderID)
         try c.encode(screenshotContext, forKey: .screenshotContext)
+        try c.encode(routerEnabled, forKey: .routerEnabled)
+        try c.encodeIfPresent(routerProviderID, forKey: .routerProviderID)
     }
 }
 
@@ -240,6 +250,58 @@ struct WebhookConfig: Codable, Equatable {
 
 // MARK: - Root config
 
+/// A paired machine (docs/multi-machine.md). Fingerprints are public; the
+/// private key lives in the secret store.
+struct PeerRef: Codable, Equatable, Identifiable {
+    var name: String = ""
+    /// Lowercase-hex SHA-256 of the peer's certificate (DER).
+    var fingerprint: String = ""
+    /// host or host:port to dial; "" = inbound-only peer.
+    var address: String = ""
+    /// This peer may fetch my screens and window list.
+    var allowScreens: Bool = false
+    /// This peer may paste text into me.
+    var allowDeliver: Bool = false
+
+    var id: String { fingerprint }
+
+    init() {}
+    init(name: String, fingerprint: String, address: String) {
+        self.name = name; self.fingerprint = fingerprint; self.address = address
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+        fingerprint = try c.decodeIfPresent(String.self, forKey: .fingerprint) ?? ""
+        address = try c.decodeIfPresent(String.self, forKey: .address) ?? ""
+        allowScreens = try c.decodeIfPresent(Bool.self, forKey: .allowScreens) ?? false
+        allowDeliver = try c.decodeIfPresent(Bool.self, forKey: .allowDeliver) ?? false
+    }
+}
+
+/// Multi-machine peering settings (docs/multi-machine.md).
+struct MultiMachineConfig: Codable, Equatable {
+    var enabled: Bool = false
+    /// "" = the host name.
+    var machineName: String = ""
+    var port: Int = 47800
+    var peers: [PeerRef] = []
+
+    var resolvedMachineName: String {
+        machineName.isEmpty ? (Host.current().localizedName ?? "this-mac") : machineName
+    }
+
+    init() {}
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+        machineName = try c.decodeIfPresent(String.self, forKey: .machineName) ?? ""
+        port = try c.decodeIfPresent(Int.self, forKey: .port) ?? 47800
+        peers = try c.decodeIfPresent([PeerRef].self, forKey: .peers) ?? []
+    }
+}
+
 struct AppConfig: Codable, Equatable {
     var version: Int = 1
     var wizardCompleted: Bool = false
@@ -278,6 +340,9 @@ struct AppConfig: Codable, Equatable {
     /// Keep the input open whenever the app is running — instant start,
     /// always; the mic-in-use indicator is always on.
     var keepMicAlwaysWarm: Bool = false
+
+    /// Multi-machine peering (docs/multi-machine.md).
+    var multiMachine = MultiMachineConfig()
 
     var expandedLibraryURL: URL {
         URL(fileURLWithPath: (libraryPath as NSString).expandingTildeInPath, isDirectory: true)
@@ -324,6 +389,7 @@ struct AppConfig: Codable, Equatable {
         libraryPath = try c.decodeIfPresent(String.self, forKey: .libraryPath) ?? "~/Documents/VoiceVector"
         keepMicWarmAfterRecording = try c.decodeIfPresent(Bool.self, forKey: .keepMicWarmAfterRecording) ?? true
         keepMicAlwaysWarm = try c.decodeIfPresent(Bool.self, forKey: .keepMicAlwaysWarm) ?? false
+        multiMachine = try c.decodeIfPresent(MultiMachineConfig.self, forKey: .multiMachine) ?? MultiMachineConfig()
     }
 }
 

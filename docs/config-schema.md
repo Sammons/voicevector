@@ -26,6 +26,8 @@ adding fields must never reset a user's config.
       "reviewBeforePaste": false,       // stage the text in the HUD; speak changes; ⏎ pastes, Esc discards
       "reviewProviderID": null,         // model that applies spoken changes; null = cleanup provider
       "screenshotContext": false        // attach screenshots of every display to cleanup + review calls
+      "routerEnabled": false,           // AI routing (needs reviewBeforePaste); see docs/multi-machine.md
+      "routerProviderID": null          // chat provider for the router; null = cleanup provider
   } ],
   //  Any number of hotkeys, each with its own cleanup policy; always ≥ 1.
   //  The first profile is the "primary" one shown in the wizard/status line.
@@ -50,9 +52,21 @@ adding fields must never reset a user's config.
   "folderWebhooks": { "<folder>": { "url": "", "includeAudio": false, "enabled": false } },
   "libraryPath": "~/Documents/VoiceVector",
   "keepMicWarmAfterRecording": true,   // keep the input open 15 s after a take
-  "keepMicAlwaysWarm": false           // keep the input open while the app runs
+  "keepMicAlwaysWarm": false,          // keep the input open while the app runs
   //  Both trade the OS mic-in-use indicator for instant starts on external
   //  interfaces (which take ~0.5 s to open).
+  "multiMachine": {                    // peering — docs/multi-machine.md
+    "enabled": false,                  // run the TLS listener
+    "machineName": "",                 // "" = the host name
+    "port": 47800,
+    "peers": [ {
+      "name": "crankshaft",
+      "fingerprint": "<64 hex>",       // SHA-256 of the peer's certificate (DER)
+      "address": "100.114.151.71",     // host or host:port; "" = inbound-only
+      "allowScreens": false,           // peer may fetch my screens/windows
+      "allowDeliver": false            // peer may paste into me
+    } ]
+  }
 }
 ```
 

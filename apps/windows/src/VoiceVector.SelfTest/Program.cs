@@ -335,6 +335,45 @@ namespace VoiceVector.SelfTest
             Expect(CleanupEngine.ReviewMessage("Hi", "shorter")
                    == "<draft>\nHi\n</draft>\n<instruction>\nshorter\n</instruction>",
                    "review: message wraps draft and instruction");
+            byte[] fpC, fpS;
+            using (var sha = System.Security.Cryptography.SHA256.Create())
+            {
+                fpC = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes("client-cert"));
+                fpS = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes("server-cert"));
+            }
+            var nonceC = Enumerable.Repeat((byte)1, 32).ToArray();
+            var nonceS = Enumerable.Repeat((byte)2, 32).ToArray();
+            Expect(PeerCrypto.PairingCode(fpC, fpS, nonceC, nonceS) == "636241",
+                   "peer: pairing code test vector");
+            var framed = PeerCrypto.Frame(new Dictionary<string, object> { { "t", "hello" }, { "name", "win" } });
+            var buffer = new List<byte>(framed) { 9, 9 };
+            int consumed;
+            var parsed = PeerCrypto.ParseFrame(buffer, out consumed);
+            Expect(parsed != null && Json.Str(parsed, "t") == "hello" && consumed == framed.Length,
+                   "peer: frame round trip leaves trailing bytes");
+            int none;
+            Expect(PeerCrypto.ParseFrame(new List<byte> { 0, 0 }, out none) == null && none == 0,
+                   "peer: incomplete frame is null");
+            Expect(PeerCrypto.ToHex(PeerCrypto.FromHex("ab01")) == "ab01", "peer: hex round trip");
+            var verdict = CleanupEngine.ParseRouterVerdict("Sure: {\"machine\": \"win\", \"window\": 42}");
+            Expect(verdict != null && verdict.Machine == "win" && verdict.Window == 42,
+                   "router: verdict parsed out of prose");
+            var bare2 = CleanupEngine.ParseRouterVerdict("{\"machine\":\"m\"}");
+            Expect(bare2 != null && bare2.Window == 0, "router: missing window is 0");
+            Expect(CleanupEngine.ParseRouterVerdict("no json here") == null, "router: garbage is null");
+            var routerMsg = CleanupEngine.RouterMessage("hi",
+                new List<Tuple<string, bool, string>> { Tuple.Create("win", true, "1: A — B") });
+            Expect(routerMsg.Contains("<draft>\nhi\n</draft>")
+                   && routerMsg.Contains("(current: the user dictated here)"), "router: message shape");
+            var mmJson = Json.ParseObject("{\"peers\":[{\"name\":\"x\",\"fingerprint\":\"ab\"}]}");
+            var mm = MultiMachineConfig.FromJson(mmJson);
+            Expect(!mm.Enabled && mm.Port == 47800 && mm.Peers.Count == 1
+                   && mm.Peers[0].Name == "x" && !mm.Peers[0].AllowDeliver,
+                   "peer: tolerant config decoding");
+            var mmBack = MultiMachineConfig.FromJson(mm.ToJson());
+            Expect(mmBack.Peers.Count == 1 && mmBack.Peers[0].Fingerprint == "ab",
+                   "peer: config round trip");
+
             var caps = new ScreenshotSet { Images = { new byte[] { 1 }, new byte[] { 2 } }, ActiveIndex = 0, Outlined = true }.Attachments();
             Expect(caps[0].Caption == "Display 1 of 2 — ACTIVE: the dictated text will be inserted here; the target window is outlined in red."
                    && caps[1].Caption == "Display 2 of 2.", "screenshot: per-display captions");
@@ -366,6 +405,9 @@ namespace VoiceVector.SelfTest
                 Expect(File.ReadAllText(Path.Combine(prompts, "review.txt")).Trim()
                        == CleanupEngine.ReviewPrompt.Trim(),
                        "review: prompt matches shared/prompts");
+                Expect(File.ReadAllText(Path.Combine(prompts, "router.txt")).Trim()
+                       .Replace("\r\n", "\n") == CleanupEngine.RouterPrompt.Trim(),
+                       "router: prompt matches shared/prompts");
             }
 
             var sp = ProviderProfile.Preset(ProviderKind.VercelGateway);

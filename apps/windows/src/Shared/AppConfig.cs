@@ -175,6 +175,11 @@ namespace VoiceVector.Shared
         /// <summary>Attach a screenshot of the foreground window to cleanup and
         /// review calls as context.</summary>
         public bool ScreenshotContext = false;
+        /// <summary>AI routing: a router model picks the destination
+        /// window/machine for the staged draft (needs ReviewBeforePaste).</summary>
+        public bool RouterEnabled = false;
+        /// <summary>null = use the review provider for routing.</summary>
+        public Guid? RouterProviderId;
 
         public Dictionary<string, object> ToJson()
         {
@@ -202,6 +207,9 @@ namespace VoiceVector.Shared
                 { "reviewProviderID", ReviewProviderId.HasValue
                     ? ReviewProviderId.Value.ToString("D") : (object)null },
                 { "screenshotContext", ScreenshotContext },
+                { "routerEnabled", RouterEnabled },
+                { "routerProviderID", RouterProviderId.HasValue
+                    ? RouterProviderId.Value.ToString("D") : (object)null },
             };
         }
 
@@ -232,6 +240,9 @@ namespace VoiceVector.Shared
             Guid rp;
             if (Guid.TryParse(Json.Str(d, "reviewProviderID"), out rp)) profile.ReviewProviderId = rp;
             profile.ScreenshotContext = Json.Bool(d, "screenshotContext", false);
+            profile.RouterEnabled = Json.Bool(d, "routerEnabled", false);
+            Guid rt;
+            if (Guid.TryParse(Json.Str(d, "routerProviderID"), out rt)) profile.RouterProviderId = rt;
             return profile;
         }
     }
@@ -253,6 +264,79 @@ namespace VoiceVector.Shared
         public string Url = "";
         public bool IncludeAudio;
         public bool Enabled;
+    }
+
+    /// <summary>A paired machine (docs/multi-machine.md).</summary>
+    public class PeerRef
+    {
+        public string Name = "";
+        /// <summary>Lowercase-hex SHA-256 of the peer's certificate (DER).</summary>
+        public string Fingerprint = "";
+        /// <summary>host or host:port to dial; "" = inbound-only peer.</summary>
+        public string Address = "";
+        /// <summary>This peer may fetch my screens and window list.</summary>
+        public bool AllowScreens;
+        /// <summary>This peer may paste text into me.</summary>
+        public bool AllowDeliver;
+
+        public Dictionary<string, object> ToJson()
+        {
+            return new Dictionary<string, object>
+            {
+                { "name", Name }, { "fingerprint", Fingerprint }, { "address", Address },
+                { "allowScreens", AllowScreens }, { "allowDeliver", AllowDeliver },
+            };
+        }
+
+        public static PeerRef FromJson(Dictionary<string, object> d)
+        {
+            return new PeerRef
+            {
+                Name = Json.Str(d, "name"),
+                Fingerprint = Json.Str(d, "fingerprint"),
+                Address = Json.Str(d, "address"),
+                AllowScreens = Json.Bool(d, "allowScreens", false),
+                AllowDeliver = Json.Bool(d, "allowDeliver", false),
+            };
+        }
+    }
+
+    /// <summary>Multi-machine peering settings (docs/multi-machine.md).</summary>
+    public class MultiMachineConfig
+    {
+        public bool Enabled;
+        /// <summary>"" = the host name.</summary>
+        public string MachineName = "";
+        public int Port = 47800;
+        public List<PeerRef> Peers = new List<PeerRef>();
+
+        public string ResolvedMachineName
+        {
+            get { return MachineName.Length > 0 ? MachineName : Environment.MachineName; }
+        }
+
+        public Dictionary<string, object> ToJson()
+        {
+            return new Dictionary<string, object>
+            {
+                { "enabled", Enabled }, { "machineName", MachineName }, { "port", (double)Port },
+                { "peers", Peers.Select(p => (object)p.ToJson()).ToList() },
+            };
+        }
+
+        public static MultiMachineConfig FromJson(Dictionary<string, object> d)
+        {
+            var mm = new MultiMachineConfig();
+            if (d == null) return mm;
+            mm.Enabled = Json.Bool(d, "enabled", false);
+            mm.MachineName = Json.Str(d, "machineName");
+            mm.Port = (int)Json.Num(d, "port", 47800);
+            var peers = Json.Arr(d, "peers");
+            if (peers != null)
+                foreach (var item in peers)
+                    if (item is Dictionary<string, object> obj) mm.Peers.Add(PeerRef.FromJson(obj));
+            return mm;
+        }
     }
 
     public class AppConfig
@@ -288,6 +372,8 @@ namespace VoiceVector.Shared
         public bool KeepMicWarmAfterRecording = true;
         /// <summary>Keep the input open whenever the app runs.</summary>
         public bool KeepMicAlwaysWarm = false;
+        /// <summary>Multi-machine peering (docs/multi-machine.md).</summary>
+        public MultiMachineConfig MultiMachine = new MultiMachineConfig();
 
         public string ExpandedLibraryPath
         {
@@ -345,6 +431,7 @@ namespace VoiceVector.Shared
                 { "libraryPath", LibraryPath },
                 { "keepMicWarmAfterRecording", KeepMicWarmAfterRecording },
                 { "keepMicAlwaysWarm", KeepMicAlwaysWarm },
+                { "multiMachine", MultiMachine.ToJson() },
             };
         }
 
@@ -412,6 +499,7 @@ namespace VoiceVector.Shared
             config.LibraryPath = Json.Str(d, "libraryPath", "~/Documents/VoiceVector");
             config.KeepMicWarmAfterRecording = Json.Bool(d, "keepMicWarmAfterRecording", true);
             config.KeepMicAlwaysWarm = Json.Bool(d, "keepMicAlwaysWarm", false);
+            config.MultiMachine = MultiMachineConfig.FromJson(Json.Obj(d, "multiMachine"));
             return config;
         }
 

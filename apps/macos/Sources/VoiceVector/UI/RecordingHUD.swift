@@ -87,6 +87,16 @@ struct HUDView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(maxHeight: 170)
+            if let route = dictation.reviewRoute {
+                HStack(spacing: 6) {
+                    Image(systemName: "arrow.uturn.right")
+                    Text(route)
+                        .lineLimit(1)
+                    Spacer()
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Theme.accent)
+            }
             HStack(spacing: 14) {
                 Label(reviewHint, systemImage: reviewHintIcon)
                     .font(.caption.weight(.medium))

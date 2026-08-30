@@ -30,6 +30,7 @@ namespace VoiceVector.Win
             stack.Children.Add(Section("Dictation", BuildDictation(owner)));
             stack.Children.Add(Section("Shared vocabulary", BuildVocabulary()));
             stack.Children.Add(Section("Folders & Webhooks", BuildFolders()));
+            stack.Children.Add(Section("Multi-machine", BuildMultiMachine()));
             stack.Children.Add(Section("General", BuildGeneral(owner)));
             stack.Children.Add(Section("About", BuildAbout()));
 
@@ -461,9 +462,45 @@ namespace VoiceVector.Win
                 11.5, secondary: true);
             screenshotHint.TextWrapping = TextWrapping.Wrap;
             screenshotHint.Margin = new Thickness(22, 2, 0, 0);
+            var routerToggle = new CheckBox
+            {
+                Content = Theme.Text("Route with AI", 12),
+                IsChecked = profile.RouterEnabled,
+                Margin = new Thickness(22, 4, 0, 0),
+            };
+            routerToggle.Click += (s, e) => { profile.RouterEnabled = routerToggle.IsChecked == true; config.Save(); };
+            var routerBox = new ComboBox { MinWidth = 220, Margin = new Thickness(22, 4, 0, 0),
+                                           HorizontalAlignment = HorizontalAlignment.Left };
+            routerBox.Items.Add("Router model: same as review");
+            foreach (var p in reviewProviders) routerBox.Items.Add(p.Name + " — " + p.ChatModel);
+            int routerIndex = profile.RouterProviderId.HasValue
+                ? reviewProviders.FindIndex(p => p.Id == profile.RouterProviderId.Value) : -1;
+            routerBox.SelectedIndex = routerIndex < 0 ? 0 : routerIndex + 1;
+            routerBox.SelectionChanged += (s, e) =>
+            {
+                profile.RouterProviderId = routerBox.SelectedIndex <= 0
+                    ? (Guid?)null : reviewProviders[routerBox.SelectedIndex - 1].Id;
+                config.Save();
+            };
+            var routerHint = Theme.Text(
+                "A router model looks at your windows (and paired machines' windows) and picks where "
+                + "the draft should go; the staging card shows its choice and Enter sends it there. "
+                + "Set up machines in the Multi-machine section.", 11.5, secondary: true);
+            routerHint.TextWrapping = TextWrapping.Wrap;
+            routerHint.Margin = new Thickness(22, 2, 0, 0);
             row.Children.Add(reviewBox);
             row.Children.Add(reviewHint);
+            row.Children.Add(routerToggle);
+            row.Children.Add(routerBox);
+            row.Children.Add(routerHint);
             row.Children.Add(screenshotHint);
+            routerToggle.Click += (s, e) =>
+            {
+                var routing = routerToggle.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+                routerBox.Visibility = routerHint.Visibility = routing;
+            };
+            routerBox.Visibility = routerHint.Visibility =
+                profile.RouterEnabled ? Visibility.Visible : Visibility.Collapsed;
             Action syncReview = () =>
             {
                 var review = reviewToggle.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
@@ -681,6 +718,145 @@ namespace VoiceVector.Win
             body.TextWrapping = TextWrapping.Wrap;
             row.Children.Add(body);
             return row;
+        }
+
+        public static UIElement BuildMultiMachine()
+        {
+            var stack = new StackPanel();
+            var config = Program.Config;
+            var mm = config.MultiMachine;
+
+            var enabled = new CheckBox
+            {
+                Content = Theme.Text("Allow paired machines to connect"),
+                IsChecked = mm.Enabled,
+                Margin = new Thickness(0, 2, 0, 4),
+            };
+            enabled.Click += (s, e) =>
+            {
+                mm.Enabled = enabled.IsChecked == true;
+                config.Save();
+                PeerService.Shared.ApplyConfig();
+            };
+            stack.Children.Add(enabled);
+
+            var nameRow = new StackPanel { Orientation = Orientation.Horizontal };
+            nameRow.Children.Add(Theme.Text("Machine name  ", 12));
+            var nameBox = new TextBox { MinWidth = 160, Text = mm.MachineName };
+            nameBox.LostFocus += (s, e) => { mm.MachineName = nameBox.Text.Trim(); config.Save(); };
+            nameRow.Children.Add(nameBox);
+            nameRow.Children.Add(Theme.Text("   Port  ", 12));
+            var portBox = new TextBox { MinWidth = 60, Text = mm.Port.ToString() };
+            portBox.LostFocus += (s, e) =>
+            {
+                int port;
+                if (int.TryParse(portBox.Text.Trim(), out port) && port > 0 && port < 65536)
+                { mm.Port = port; config.Save(); PeerService.Shared.ApplyConfig(); }
+            };
+            nameRow.Children.Add(portBox);
+            stack.Children.Add(nameRow);
+
+            var hint = Theme.Text(
+                "Machines pair once with a 6-digit code confirmed on both screens, then talk over TLS "
+                + "with pinned identities. Use tailnet or LAN addresses only.", 11.5, secondary: true);
+            hint.TextWrapping = TextWrapping.Wrap;
+            hint.Margin = new Thickness(0, 4, 0, 8);
+            stack.Children.Add(hint);
+
+            foreach (var peerRef in mm.Peers.ToList())
+            {
+                var peer = peerRef;
+                var peerRow = new StackPanel { Margin = new Thickness(0, 2, 0, 6) };
+                var head = new StackPanel { Orientation = Orientation.Horizontal };
+                head.Children.Add(Theme.Text(peer.Name, 12.5));
+                var fp = Theme.Text("  " + peer.Fingerprint.Substring(0, Math.Min(12, peer.Fingerprint.Length)) + "…",
+                                    11, secondary: true);
+                fp.VerticalAlignment = VerticalAlignment.Center;
+                head.Children.Add(fp);
+                var remove = Theme.MakeButton("Remove");
+                remove.Margin = new Thickness(10, 0, 0, 0);
+                head.Children.Add(remove);
+                peerRow.Children.Add(head);
+                var detail = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 3, 0, 0) };
+                detail.Children.Add(Theme.Text("Address  ", 11.5, secondary: true));
+                var addressBox = new TextBox { MinWidth = 160, Text = peer.Address };
+                addressBox.LostFocus += (s, e) => { peer.Address = addressBox.Text.Trim(); config.Save(); };
+                detail.Children.Add(addressBox);
+                var allowScreens = new CheckBox
+                {
+                    Content = Theme.Text("May see my screens", 11.5),
+                    IsChecked = peer.AllowScreens,
+                    Margin = new Thickness(12, 0, 0, 0),
+                };
+                allowScreens.Click += (s, e) => { peer.AllowScreens = allowScreens.IsChecked == true; config.Save(); };
+                detail.Children.Add(allowScreens);
+                var allowDeliver = new CheckBox
+                {
+                    Content = Theme.Text("May paste into me", 11.5),
+                    IsChecked = peer.AllowDeliver,
+                    Margin = new Thickness(12, 0, 0, 0),
+                };
+                allowDeliver.Click += (s, e) => { peer.AllowDeliver = allowDeliver.IsChecked == true; config.Save(); };
+                detail.Children.Add(allowDeliver);
+                peerRow.Children.Add(detail);
+                remove.Click += (s, e) =>
+                {
+                    mm.Peers.Remove(peer);
+                    config.Save();
+                    stack.Children.Remove(peerRow);
+                };
+                stack.Children.Add(peerRow);
+            }
+
+            var pairRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 6, 0, 0) };
+            var addressField = new TextBox { MinWidth = 200 };
+            pairRow.Children.Add(Theme.Text("Other machine's address  ", 12));
+            pairRow.Children.Add(addressField);
+            var pairButton = Theme.MakeButton("Pair…");
+            pairButton.Margin = new Thickness(8, 0, 0, 0);
+            pairRow.Children.Add(pairButton);
+            stack.Children.Add(pairRow);
+            var pairStatus = Theme.Text("", 11.5, secondary: true);
+            pairStatus.Margin = new Thickness(0, 4, 0, 0);
+            stack.Children.Add(pairStatus);
+            pairButton.Click += async (s, e) =>
+            {
+                var address = addressField.Text.Trim();
+                if (address.Length == 0) return;
+                pairButton.IsEnabled = false;
+                pairStatus.Text = "Connecting…";
+                try
+                {
+                    var peer = await PeerService.Shared.PairAsync(address, (code, answer) =>
+                    {
+                        var result = MessageBox.Show(
+                            "Does the other machine show this code?\n\n"
+                            + code.Substring(0, 3) + " " + code.Substring(3),
+                            "VoiceVector pairing", MessageBoxButton.YesNo, MessageBoxImage.Question);
+                        answer(result == MessageBoxResult.Yes);
+                    });
+                    if (!mm.Peers.Any(p => p.Fingerprint == peer.Fingerprint))
+                    {
+                        mm.Peers.Add(peer);
+                        config.Save();
+                    }
+                    pairStatus.Text = "Paired with " + peer.Name + ". Reopen Settings to manage it.";
+                    addressField.Text = "";
+                }
+                catch (Exception ex)
+                {
+                    pairStatus.Text = "Pairing failed: " + ex.Message;
+                }
+                pairButton.IsEnabled = true;
+            };
+
+            var footer = Theme.Text(
+                "VoiceVector must be running (with connections allowed) on the other machine. "
+                + "Start pairing from either side.", 11.5, secondary: true);
+            footer.TextWrapping = TextWrapping.Wrap;
+            footer.Margin = new Thickness(0, 4, 0, 0);
+            stack.Children.Add(footer);
+            return stack;
         }
 
         public static UIElement BuildAbout()

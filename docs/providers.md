@@ -82,6 +82,13 @@ after the same sanitizing as cleanup (code fences and echoed delimiters
 stripped; empty ⇒ unchanged). The review model defaults to the cleanup
 provider and can be any chat-capable provider.
 
+**AI routing** (per hotkey, with review): one chat call at review time —
+system = `shared/prompts/router.txt`, user = `<draft>…</draft>` plus each
+machine's numbered window list, images = every machine's captioned
+screenshots. The reply must be `{"machine": "<name>", "window": <id>}`
+(parsed out of surrounding prose; anything unparseable falls back to the
+normal paste). The router model defaults to the review provider.
+
 **Screenshot context** attaches one JPEG per display (≤1280 px wide) to the
 cleanup call and every revision, with a one-line note appended to the system
 prompt. The user content becomes an array of parts: the text, then for each

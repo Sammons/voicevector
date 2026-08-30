@@ -23,6 +23,7 @@ struct VvController {
     VvState state;
     char *detail;                 /* "Transcribing…" etc. */
     char *review_draft;           /* non-NULL while a review session is active */
+    char *review_route;           /* router verdict for the staging card, or NULL */
     guint library_generation;
     VvStateFn on_change; gpointer user;
     /* private */
@@ -41,4 +42,8 @@ void vv_controller_discard(VvController *c);
 void vv_controller_accept_review(VvController *c);
 void vv_controller_discard_review(VvController *c);
 void vv_controller_retry(VvController *c, VvEntry *entry);
+/* Inbound routed text from a paired machine: paste + save. done() gets the
+ * outcome. Main thread. */
+void vv_controller_receive_routed(VvController *c, const char *text,
+                                  void (*done)(bool ok, const char *error, gpointer token), gpointer token);
 bool vv_controller_is_busy(const VvController *c);

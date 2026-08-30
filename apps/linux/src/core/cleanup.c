@@ -21,6 +21,53 @@ const char *vv_review_prompt(void) {
     return review;
 }
 
+const char *vv_router_prompt(void) {
+    static char router[2048];
+    if (!router[0]) strip_trailing_newline(VV_PROMPT_ROUTER, router, sizeof router);
+    return router;
+}
+
+VvRouterMachine *vv_router_machine_new(const char *name, bool current, const char *windows) {
+    VvRouterMachine *m = g_new0(VvRouterMachine, 1);
+    m->name = g_strdup(name); m->current = current; m->windows = g_strdup(windows ? windows : "");
+    return m;
+}
+
+void vv_router_machine_free(VvRouterMachine *m) {
+    if (!m) return;
+    g_free(m->name); g_free(m->windows); g_free(m);
+}
+
+char *vv_router_message(const char *draft, GPtrArray *machines) {
+    GString *s = g_string_new(NULL);
+    g_string_append_printf(s, "<draft>\n%s\n</draft>", draft);
+    for (guint i = 0; machines && i < machines->len; i++) {
+        VvRouterMachine *m = g_ptr_array_index(machines, i);
+        g_string_append_printf(s, "\nMachine \"%s\"%s windows:\n%s", m->name,
+                               m->current ? " (current: the user dictated here)" : "",
+                               *m->windows ? m->windows : "(none listed — window 0 only)");
+    }
+    return g_string_free(s, FALSE);
+}
+
+bool vv_router_parse(const char *reply, char **machine_out, guint32 *window_out) {
+    *machine_out = NULL; *window_out = 0;
+    if (!reply) return false;
+    const char *start = strchr(reply, '{');
+    const char *end = strrchr(reply, '}');
+    if (!start || !end || end <= start) return false;
+    char *json = g_strndup(start, end - start + 1);
+    VvJson *obj = vv_json_parse(json, NULL);
+    g_free(json);
+    if (!obj || obj->type != VV_JSON_OBJECT) { vv_json_free(obj); return false; }
+    const char *machine = vv_json_get_string(obj, "machine", NULL);
+    if (!machine) { vv_json_free(obj); return false; }
+    *machine_out = g_strdup(machine);
+    *window_out = (guint32)vv_json_get_number(obj, "window", 0);
+    vv_json_free(obj);
+    return true;
+}
+
 const char *vv_screenshot_note(void) {
     return "Screenshots of the user's displays are attached for context (names, terms, tone), each preceded by a caption saying which display is active — the one the text will be inserted into; never copy content from them.";
 }

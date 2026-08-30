@@ -122,7 +122,8 @@ VvProfile *vv_profile_new(void) {
 void vv_profile_free(VvProfile *p) {
     if (!p) return;
     g_free(p->id); g_free(p->name); g_free(p->cleanup_provider_id); g_free(p->custom_prompt);
-    g_free(p->stt_provider_id); g_free(p->vocabulary); g_free(p->review_provider_id); g_free(p);
+    g_free(p->stt_provider_id); g_free(p->vocabulary); g_free(p->review_provider_id);
+    g_free(p->router_provider_id); g_free(p);
 }
 
 static VvJson *hotkey_to_json(const VvHotkey *h) {
@@ -155,6 +156,8 @@ VvJson *vv_profile_to_json(const VvProfile *p) {
     vv_json_object_set(o, "reviewBeforePaste", vv_json_bool(p->review_before_paste));
     vv_json_object_set(o, "reviewProviderID", vv_json_string(p->review_provider_id));
     vv_json_object_set(o, "screenshotContext", vv_json_bool(p->screenshot_context));
+    vv_json_object_set(o, "routerEnabled", vv_json_bool(p->router_enabled));
+    vv_json_object_set(o, "routerProviderID", vv_json_string(p->router_provider_id));
     return o;
 }
 
@@ -177,12 +180,30 @@ VvProfile *vv_profile_from_json(const VvJson *j) {
     const char *rp = vv_json_get_string(j, "reviewProviderID", NULL);
     if (valid_uuid(rp)) p->review_provider_id = g_ascii_strdown(rp, -1);
     p->screenshot_context = vv_json_get_bool(j, "screenshotContext", false);
+    p->router_enabled = vv_json_get_bool(j, "routerEnabled", false);
+    const char *rt = vv_json_get_string(j, "routerProviderID", NULL);
+    if (valid_uuid(rt)) p->router_provider_id = g_ascii_strdown(rt, -1);
     return p;
 }
 
 /* ---------------------------------------------------------- config */
 
 static void webhook_free(gpointer w) { VvWebhook *h = w; g_free(h->url); g_free(h); }
+
+VvPeer *vv_peer_ref_new(void) {
+    VvPeer *p = g_new0(VvPeer, 1);
+    p->name = g_strdup(""); p->fingerprint = g_strdup(""); p->address = g_strdup("");
+    return p;
+}
+
+void vv_peer_ref_free(VvPeer *p) {
+    if (!p) return;
+    g_free(p->name); g_free(p->fingerprint); g_free(p->address); g_free(p);
+}
+
+const char *vv_multi_machine_name(const VvMultiMachine *mm) {
+    return mm->machine_name && *mm->machine_name ? mm->machine_name : g_get_host_name();
+}
 
 VvConfig *vv_config_new(void) {
     VvConfig *c = g_new0(VvConfig, 1);
@@ -203,6 +224,9 @@ VvConfig *vv_config_new(void) {
     c->keep_mic_warm_after_recording = true;
     c->keep_mic_always_warm = false;
     c->hotkey_backend = VV_HOTKEY_BACKEND_AUTO;
+    c->multi_machine.machine_name = g_strdup("");
+    c->multi_machine.port = 47800;
+    c->multi_machine.peers = g_ptr_array_new_with_free_func((GDestroyNotify)vv_peer_ref_free);
     return c;
 }
 
@@ -210,6 +234,8 @@ void vv_config_free(VvConfig *c) {
     if (!c) return;
     g_ptr_array_unref(c->profiles);
     g_ptr_array_unref(c->providers);
+    g_free(c->multi_machine.machine_name);
+    g_ptr_array_unref(c->multi_machine.peers);
     g_free(c->stt_provider_id);
     g_free(c->cleanup.provider_id); g_free(c->cleanup.vocabulary); g_free(c->cleanup.custom_prompt);
     g_free(c->active_folder);
@@ -258,6 +284,23 @@ VvJson *vv_config_to_json(const VvConfig *c) {
     vv_json_object_set(o, "keepMicWarmAfterRecording", vv_json_bool(c->keep_mic_warm_after_recording));
     vv_json_object_set(o, "keepMicAlwaysWarm", vv_json_bool(c->keep_mic_always_warm));
     vv_json_object_set(o, "hotkeyBackend", vv_json_string(BACKEND_WIRE[c->hotkey_backend]));
+    VvJson *mm = vv_json_object();
+    vv_json_object_set(mm, "enabled", vv_json_bool(c->multi_machine.enabled));
+    vv_json_object_set(mm, "machineName", vv_json_string(c->multi_machine.machine_name));
+    vv_json_object_set(mm, "port", vv_json_number(c->multi_machine.port));
+    VvJson *peers = vv_json_array();
+    for (guint i = 0; i < c->multi_machine.peers->len; i++) {
+        VvPeer *p = g_ptr_array_index(c->multi_machine.peers, i);
+        VvJson *pj = vv_json_object();
+        vv_json_object_set(pj, "name", vv_json_string(p->name));
+        vv_json_object_set(pj, "fingerprint", vv_json_string(p->fingerprint));
+        vv_json_object_set(pj, "address", vv_json_string(p->address));
+        vv_json_object_set(pj, "allowScreens", vv_json_bool(p->allow_screens));
+        vv_json_object_set(pj, "allowDeliver", vv_json_bool(p->allow_deliver));
+        vv_json_array_add(peers, pj);
+    }
+    vv_json_object_set(mm, "peers", peers);
+    vv_json_object_set(o, "multiMachine", mm);
     return o;
 }
 
@@ -319,6 +362,25 @@ VvConfig *vv_config_from_json(const VvJson *j) {
     const char *backend = vv_json_get_string(j, "hotkeyBackend", "auto");
     c->hotkey_backend = strcmp(backend, "portal") == 0 ? VV_HOTKEY_BACKEND_PORTAL
                       : strcmp(backend, "raw") == 0 ? VV_HOTKEY_BACKEND_RAW : VV_HOTKEY_BACKEND_AUTO;
+    VvJson *mm = vv_json_get_object(j, "multiMachine");
+    if (mm) {
+        c->multi_machine.enabled = vv_json_get_bool(mm, "enabled", false);
+        g_free(c->multi_machine.machine_name);
+        c->multi_machine.machine_name = g_strdup(vv_json_get_string(mm, "machineName", ""));
+        c->multi_machine.port = (int)vv_json_get_number(mm, "port", 47800);
+        VvJson *peers = vv_json_get_array(mm, "peers");
+        for (guint i = 0; peers && i < vv_json_array_length(peers); i++) {
+            VvJson *pj = vv_json_array_get(peers, i);
+            if (!pj || pj->type != VV_JSON_OBJECT) continue;
+            VvPeer *p = vv_peer_ref_new();
+            g_free(p->name); p->name = g_strdup(vv_json_get_string(pj, "name", ""));
+            g_free(p->fingerprint); p->fingerprint = g_strdup(vv_json_get_string(pj, "fingerprint", ""));
+            g_free(p->address); p->address = g_strdup(vv_json_get_string(pj, "address", ""));
+            p->allow_screens = vv_json_get_bool(pj, "allowScreens", false);
+            p->allow_deliver = vv_json_get_bool(pj, "allowDeliver", false);
+            g_ptr_array_add(c->multi_machine.peers, p);
+        }
+    }
     return c;
 }
 

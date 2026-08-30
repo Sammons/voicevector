@@ -5,6 +5,7 @@
 #include "core/wav.h"
 #include "core/log.h"
 #include "platform/services.h"
+#include "platform/peerservice.h"
 #include <gio/gio.h>
 #include <glib/gstdio.h>
 #include <string.h>
@@ -24,6 +25,10 @@ typedef struct {
     char *profile_id;
     VvScreenshotSet *screenshots;   /* or NULL */
     int revisions;
+    /* router verdict (docs/multi-machine.md); label NULL = normal paste */
+    char *route_label;
+    char *route_peer_fp;            /* remote target's fingerprint */
+    guint32 route_window;
 } Review;
 
 typedef struct {
@@ -122,7 +127,7 @@ void vv_controller_free(VvController *c) {
     g_free(p->active_profile_id); g_free(p->slot_id); g_free(p->slot_audio); g_free(p->slot_folder); g_free(p->command_path);
     vv_screenshot_set_unref(p->pending_screenshots);
     g_free(p);
-    g_free(c->config_path); g_free(c->detail); g_free(c->review_draft);
+    g_free(c->config_path); g_free(c->detail); g_free(c->review_draft); g_free(c->review_route);
     g_free(c);
 }
 
@@ -372,6 +377,7 @@ static gpointer pipeline_thread(gpointer data) {
 }
 
 static void deliver(VvController *c, VvEntry *entry, const char *audio_path, const char *folder);
+static void start_router(VvController *c, Review *r, VvProfile *profile);
 
 static gboolean pipeline_done(gpointer data) {
     Pipeline *pl = data;
@@ -388,6 +394,11 @@ static gboolean pipeline_done(gpointer data) {
         r->screenshots = vv_screenshot_set_ref(pl->screenshots);
         p->review = r;
         g_free(c->review_draft); c->review_draft = g_strdup(r->entry->cleaned);
+        g_free(c->review_route); c->review_route = NULL;
+        if (pl->profile->router_enabled) {
+            c->review_route = g_strdup("Routing…");
+            start_router(c, r, pl->profile);
+        }
         set_state(c, VV_STATE_REVIEWING, NULL);
     } else {
         deliver(c, pl->entry, pl->job.audio_path, pl->job.folder);
@@ -583,6 +594,55 @@ void vv_controller_apply_command(VvController *c, char *path) {
     g_thread_unref(th);
 }
 
+static void review_free(Review *r) {
+    vv_entry_free(r->entry); g_free(r->audio_path); g_free(r->folder); g_free(r->profile_id);
+    vv_screenshot_set_unref(r->screenshots);
+    g_free(r->route_label); g_free(r->route_peer_fp);
+    g_free(r);
+}
+
+/* Remote delivery of an accepted, routed draft (worker thread + idle). */
+typedef struct { VvController *c; Review *r; char *error; } RouteDeliverTask;
+
+static gboolean route_deliver_done(gpointer data) {
+    RouteDeliverTask *t = data;
+    VvController *c = t->c;
+    Review *r = t->r;
+    if (t->error) {
+        char *m = g_strdup_printf("Could not deliver to %s: %s — pasting here instead.",
+                                  r->route_label, t->error);
+        notify(c, m); g_free(m);
+        deliver(c, r->entry, r->audio_path, r->folder);
+    } else {
+        set_state(c, VV_STATE_IDLE, NULL);
+        VvWebhook *hook = g_hash_table_lookup(c->config->folder_webhooks, r->folder);
+        if (hook && hook->enabled) {
+            HookTask *ht = g_new0(HookTask, 1);
+            ht->entry = vv_library_parse(vv_library_render(r->entry), r->entry->id, r->entry->folder);
+            ht->audio_path = g_strdup(r->audio_path);
+            ht->hook = *hook; ht->hook.url = g_strdup(hook->url);
+            GThread *th = g_thread_new("vv-webhook", hook_thread, ht);
+            g_thread_unref(th);
+        }
+    }
+    review_free(r);
+    g_free(t->error); g_free(t);
+    return G_SOURCE_REMOVE;
+}
+
+static gpointer route_deliver_thread(gpointer data) {
+    RouteDeliverTask *t = data;
+    VvPeer *peer = NULL;
+    for (guint i = 0; i < t->c->config->multi_machine.peers->len; i++) {
+        VvPeer *p2 = g_ptr_array_index(t->c->config->multi_machine.peers, i);
+        if (g_strcmp0(p2->fingerprint, t->r->route_peer_fp) == 0) { peer = p2; break; }
+    }
+    t->error = peer ? vv_peer_service_deliver(peer, t->r->entry->cleaned, t->r->route_window)
+                    : g_strdup("peer is gone");
+    g_idle_add(route_deliver_done, t);
+    return NULL;
+}
+
 static void end_review(VvController *c, bool paste) {
     Priv *p = P(c);
     Review *r = p->review;
@@ -590,13 +650,167 @@ static void end_review(VvController *c, bool paste) {
     p->review = NULL;
     if (c->review_draft) { g_free(r->entry->cleaned); r->entry->cleaned = g_strdup(c->review_draft); }
     g_free(c->review_draft); c->review_draft = NULL;
+    g_free(c->review_route); c->review_route = NULL;
     if (!paste) { g_free(r->entry->status); r->entry->status = g_strdup("complete (not pasted)"); }
+    if (paste && r->route_label && r->route_peer_fp) {
+        char *label = g_strconcat(r->entry->cleanup_label, " · routed to ", r->route_label, NULL);
+        g_free(r->entry->cleanup_label); r->entry->cleanup_label = label;
+    }
     vv_library_save(c->library, r->entry);
     bump_library(c);
+    if (paste && r->route_label && r->route_peer_fp) {
+        char *m = g_strdup_printf("Sending to %s…", r->route_label);
+        set_state(c, VV_STATE_PROCESSING, m);
+        g_free(m);
+        RouteDeliverTask *t = g_new0(RouteDeliverTask, 1);
+        t->c = c; t->r = r;
+        GThread *th = g_thread_new("vv-route-deliver", route_deliver_thread, t);
+        g_thread_unref(th);
+        return;
+    }
     if (paste) deliver(c, r->entry, r->audio_path, r->folder); else set_state(c, VV_STATE_IDLE, NULL);
-    vv_entry_free(r->entry); g_free(r->audio_path); g_free(r->folder); g_free(r->profile_id);
-    vv_screenshot_set_unref(r->screenshots);
-    g_free(r);
+    review_free(r);
+}
+
+void vv_controller_receive_routed(VvController *c, const char *text,
+                                  void (*done)(bool ok, const char *error, gpointer token), gpointer token) {
+    if (vv_controller_is_busy(c)) { done(false, "busy dictating", token); return; }
+    char *reason = NULL;
+    VvPasteOutcome outcome = vv_paste_insert(text, c->config->auto_paste, &reason);
+    char *id = NULL, *audio = NULL;
+    vv_library_new_slot(c->library, c->config->active_folder, &id, &audio);
+    VvEntry *entry = vv_entry_new();
+    g_free(entry->id); entry->id = g_strdup(id);
+    g_free(entry->folder); entry->folder = g_strdup(c->config->active_folder);
+    entry->date_unix = g_get_real_time() / G_USEC_PER_SEC;
+    g_free(entry->stt_label); entry->stt_label = g_strdup("routed from a paired machine");
+    g_free(entry->cleaned); entry->cleaned = g_strdup(text);
+    g_free(entry->raw); entry->raw = g_strdup(text);
+    if (outcome == VV_PASTE_COPIED_ONLY) {
+        g_free(entry->status); entry->status = g_strdup("complete (copied only)");
+        char *m = g_strdup_printf("Routed text copied — %s. Press Ctrl+V to insert it.", reason ? reason : "");
+        notify(c, m); g_free(m);
+    }
+    vv_library_save(c->library, entry);
+    bump_library(c);
+    vv_entry_free(entry);
+    g_free(reason); g_free(id); g_free(audio);
+    done(true, NULL, token);
+}
+
+/* ---------------------------------------------------- AI routing */
+
+typedef struct {
+    VvController *c;
+    Review *r;                     /* checked against p->review before use */
+    char *draft;
+    char *router_provider_id;      /* or NULL */
+    char *review_provider_id;
+    char *cleanup_provider_id;     /* effective fallback chain */
+    VvScreenshotSet *screens;
+    /* results */
+    char *route_label, *route_peer_fp;
+    guint32 route_window;
+    char *route_display;
+} RouterTask;
+
+static gboolean router_done(gpointer data) {
+    RouterTask *t = data;
+    VvController *c = t->c;
+    Priv *p = P(c);
+    if (p->review == t->r && c->state == VV_STATE_REVIEWING) {
+        g_free(c->review_route);
+        c->review_route = t->route_display; t->route_display = NULL;
+        g_free(t->r->route_label); t->r->route_label = t->route_label; t->route_label = NULL;
+        g_free(t->r->route_peer_fp); t->r->route_peer_fp = t->route_peer_fp; t->route_peer_fp = NULL;
+        t->r->route_window = t->route_window;
+        set_state(c, VV_STATE_REVIEWING, NULL);
+    }
+    g_free(t->draft); g_free(t->router_provider_id); g_free(t->review_provider_id);
+    g_free(t->cleanup_provider_id);
+    vv_screenshot_set_unref(t->screens);
+    g_free(t->route_label); g_free(t->route_peer_fp); g_free(t->route_display);
+    g_free(t);
+    return G_SOURCE_REMOVE;
+}
+
+static gpointer router_thread(gpointer data) {
+    RouterTask *t = data;
+    VvController *c = t->c;
+    VvConfig *cfg = c->config;
+    const char *ids[] = { t->router_provider_id, t->review_provider_id, t->cleanup_provider_id };
+    VvProvider *provider = NULL;
+    for (int i = 0; i < 3 && !provider; i++)
+        if (ids[i]) { VvProvider *p2 = vv_config_find_provider(cfg, ids[i]);
+                      if (p2 && vv_kind_supports_chat(p2->kind) && *p2->chat_model) provider = p2; }
+    for (guint i = 0; !provider && i < cfg->providers->len; i++) {
+        VvProvider *p2 = g_ptr_array_index(cfg->providers, i);
+        if (vv_kind_supports_chat(p2->kind) && *p2->chat_model) provider = p2;
+    }
+    if (!provider) { g_idle_add(router_done, t); return NULL; }
+    const char *machine_name = vv_multi_machine_name(&cfg->multi_machine);
+    GPtrArray *contexts = g_ptr_array_new_with_free_func((GDestroyNotify)vv_machine_context_free);
+    g_ptr_array_add(contexts, vv_peer_service_local_context(machine_name, t->screens));
+    for (guint i = 0; i < cfg->multi_machine.peers->len; i++) {
+        VvPeer *peer = g_ptr_array_index(cfg->multi_machine.peers, i);
+        VvMachineContext *ctx = vv_peer_service_fetch_context(peer);
+        if (ctx) g_ptr_array_add(contexts, ctx);
+    }
+    GPtrArray *machines = g_ptr_array_new_with_free_func((GDestroyNotify)vv_router_machine_free);
+    GPtrArray *attachments = g_ptr_array_new_with_free_func((GDestroyNotify)vv_screenshot_free);
+    for (guint i = 0; i < contexts->len; i++) {
+        VvMachineContext *ctx = g_ptr_array_index(contexts, i);
+        g_ptr_array_add(machines, vv_router_machine_new(ctx->machine, ctx->is_local, ctx->window_lines));
+        for (guint k = 0; k < ctx->screens->len; k++) {
+            VvScreenshot *shot = g_ptr_array_index(ctx->screens, k);
+            g_ptr_array_add(attachments, vv_screenshot_new(shot->jpeg, g_strdup(shot->caption)));
+        }
+    }
+    char *user = vv_router_message(t->draft, machines);
+    char *key = vv_secret_get(provider->id);
+    char *reply = NULL, *error = NULL;
+    bool ok = vv_provider_chat(provider, key, vv_router_prompt(), user, attachments, &reply, &error);
+    if (!ok) { g_free(error); error = NULL; ok = vv_provider_chat(provider, key, vv_router_prompt(), user, NULL, &reply, &error); }
+    if (ok) {
+        char *machine = NULL; guint32 window = 0;
+        if (vv_router_parse(reply, &machine, &window)) {
+            for (guint i = 0; i < contexts->len; i++) {
+                VvMachineContext *ctx = g_ptr_array_index(contexts, i);
+                if (g_strcmp0(ctx->machine, machine) != 0 || ctx->is_local) continue;
+                for (guint k = 0; k < cfg->multi_machine.peers->len; k++) {
+                    VvPeer *peer = g_ptr_array_index(cfg->multi_machine.peers, k);
+                    if (g_strcmp0(peer->name, ctx->machine) == 0) {
+                        t->route_peer_fp = g_strdup(peer->fingerprint);
+                        t->route_label = g_strdup(ctx->machine);
+                        t->route_window = window;
+                        t->route_display = g_strdup_printf("→ %s", ctx->machine);
+                        break;
+                    }
+                }
+            }
+        }
+        g_free(machine);
+    } else {
+        vv_log_error("Router failed: %s", error ? error : "?");
+    }
+    g_free(error); g_free(reply); g_free(key); g_free(user);
+    g_ptr_array_unref(attachments); g_ptr_array_unref(machines); g_ptr_array_unref(contexts);
+    g_idle_add(router_done, t);
+    return NULL;
+}
+
+static void start_router(VvController *c, Review *r, VvProfile *profile) {
+    VvEffective eff = vv_effective(profile, c->config);
+    RouterTask *t = g_new0(RouterTask, 1);
+    t->c = c; t->r = r;
+    t->draft = g_strdup(r->entry->cleaned);
+    t->router_provider_id = g_strdup(profile->router_provider_id);
+    t->review_provider_id = g_strdup(profile->review_provider_id);
+    t->cleanup_provider_id = eff.provider ? g_strdup(eff.provider->id) : NULL;
+    t->screens = vv_screenshot_set_ref(r->screenshots);
+    vv_effective_clear(&eff);
+    GThread *th = g_thread_new("vv-router", router_thread, t);
+    g_thread_unref(th);
 }
 
 void vv_controller_accept_review(VvController *c) { end_review(c, true); }
