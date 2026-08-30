@@ -92,6 +92,12 @@ struct HotkeySpec: Codable, Equatable {
 
     /// Default: Right Option.
     static let `default` = HotkeySpec(keyCode: 61, modifiers: 0, isModifierOnly: true)
+
+    /// A freshly added profile's placeholder. Key code 0 is a real key on
+    /// macOS (the letter A), so "unset" is exactly this triple — the engine
+    /// must never match it (it would swallow plain A).
+    static let unset = HotkeySpec(keyCode: 0, modifiers: 0, isModifierOnly: false)
+    var isSet: Bool { self != HotkeySpec.unset }
 }
 
 /// One hotkey + its cleanup policy. Anything not overridden inherits the

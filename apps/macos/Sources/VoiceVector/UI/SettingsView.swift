@@ -306,7 +306,7 @@ struct DictationSettings: View {
                     Button {
                         var profile = DictationProfile()
                         profile.name = "Hotkey \(app.config.dictationProfiles.count + 1)"
-                        profile.hotkey = HotkeySpec(keyCode: 0, modifiers: 0, isModifierOnly: false)
+                        profile.hotkey = HotkeySpec.unset
                         profile.cleanupMode = CleanupEngine.effectiveMode(profile: nil, config: app.config)
                         app.config.dictationProfiles.append(profile)
                     } label: {
@@ -406,7 +406,7 @@ struct ProfileRow: View {
                         toggleCapture()
                     } label: {
                         Text(capturing ? "Press a key…" :
-                             profile.hotkey.keyCode == 0 && !profile.hotkey.isModifierOnly
+                             !profile.hotkey.isSet
                                 ? "Set hotkey…" : HotkeyEngine.describe(profile.hotkey))
                             .font(.system(.callout, design: .rounded).weight(.semibold))
                             .frame(minWidth: 90)

@@ -1,4 +1,5 @@
 import Foundation
+import CoreGraphics
 
 /// Built-in test suite (`VoiceVector --self-test`) covering the pure logic.
 /// Command Line Tools ship no XCTest, so the app carries its own tiny harness
@@ -237,6 +238,9 @@ enum SelfTest {
         let names = (UInt16(0)...UInt16(127)).map { HotkeyEngine.keyName($0) }
         expect(names.count == 128 && names.contains("F20") && !names.contains(""),
                "hotkey: keyName total over all key codes")
+        expect(!HotkeySpec.unset.isSet && HotkeySpec.default.isSet
+               && HotkeySpec(keyCode: 0, modifiers: CGEventFlags.maskCommand.rawValue, isModifierOnly: false).isSet,
+               "hotkey: unset placeholder is never a binding (key code 0 is the letter A)")
         expect(CleanupEngine.sanitize("<draft>\nHello\n</draft>", fallback: "x") == "Hello",
                "review: echoed draft delimiters stripped")
         var reviewProfile = DictationProfile(name: "Email", hotkey: .default, cleanupMode: .rich)

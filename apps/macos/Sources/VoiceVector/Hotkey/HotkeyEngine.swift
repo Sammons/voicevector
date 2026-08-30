@@ -133,6 +133,7 @@ final class HotkeyEngine {
         // Try each profile's hotkey; a gesture in progress only accepts
         // events from its initiating profile.
         for profile in profiles {
+            guard profile.hotkey.isSet else { continue }
             if machine.isActive && activeProfileID != profile.id { continue }
             if let verdict = interpret(profile.hotkey, profileID: profile.id,
                                        type: type, keyCode: keyCode, event: event) {

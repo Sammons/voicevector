@@ -21,6 +21,8 @@ all three apps share one version number.
   warm" was on.
 - **Fix (macOS):** binding a hotkey to a regular (non-modifier) key crashed
   the app whenever Settings showed that hotkey's name.
+- **Fix (macOS):** a newly added hotkey that was never set swallowed the
+  letter A everywhere (its placeholder is key code 0, which is A).
 
 ## v0.4.0 — 2026-08-30
 
