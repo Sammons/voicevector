@@ -231,6 +231,12 @@ enum SelfTest {
         expect(ScreenshotSet(images: [Data([1])], activeIndex: nil, outlined: false).attachments.first?.caption
                == "Display 1 of 1 (which display is active is not known on this desktop).",
                "screenshot: unknown-active caption")
+
+        // Every key code must produce a name without trapping (F-key virtual
+        // codes are unordered; a range over them crashed the settings UI).
+        let names = (UInt16(0)...UInt16(127)).map { HotkeyEngine.keyName($0) }
+        expect(names.count == 128 && names.contains("F20") && !names.contains(""),
+               "hotkey: keyName total over all key codes")
         expect(CleanupEngine.sanitize("<draft>\nHello\n</draft>", fallback: "x") == "Hello",
                "review: echoed draft delimiters stripped")
         var reviewProfile = DictationProfile(name: "Email", hotkey: .default, cleanupMode: .rich)

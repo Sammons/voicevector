@@ -267,7 +267,8 @@ final class HotkeyEngine {
         case kVK_Tab: return "⇥"
         case kVK_Delete: return "⌫"
         case kVK_Escape: return "⎋"
-        case kVK_F1...kVK_F20 where fKeyNames[Int(keyCode)] != nil: return fKeyNames[Int(keyCode)]!
+        // NB: F-key virtual codes are not contiguous or ordered (kVK_F1 is
+        // 0x7A, kVK_F20 is 0x5A) — never build a range from them.
         default:
             if let name = fKeyNames[Int(keyCode)] { return name }
             return characterName(keyCode) ?? "key \(keyCode)"

@@ -19,6 +19,8 @@ all three apps share one version number.
   instead of capturing whatever is on screen now. Deleted with the entry.
 - **Fix (macOS):** the app crashed at launch when "Keep the microphone always
   warm" was on.
+- **Fix (macOS):** binding a hotkey to a regular (non-modifier) key crashed
+  the app whenever Settings showed that hotkey's name.
 
 ## v0.4.0 — 2026-08-30
 
