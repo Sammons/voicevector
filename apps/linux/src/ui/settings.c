@@ -565,7 +565,7 @@ static void on_peer_remove(GtkButton *b, gpointer d) {
 }
 
 static void pair_set_status(const char *text) {
-    if (pair_status_label) gtk_label_set_text(GTK_LABEL(pair_status_label), text);
+    if (pair_status_label && GTK_IS_LABEL(pair_status_label)) gtk_label_set_text(GTK_LABEL(pair_status_label), text);
 }
 
 typedef struct { void (*answer)(bool, gpointer); gpointer token; } PairAnswer;
@@ -602,9 +602,9 @@ static void on_pair_done(VvPeer *peer, const char *error, gpointer user) {
         bool known = false;
         for (guint i = 0; i < c->multi_machine.peers->len; i++)
             if (g_strcmp0(((VvPeer *)g_ptr_array_index(c->multi_machine.peers, i))->fingerprint, peer->fingerprint) == 0) known = true;
+        char *m = g_strdup_printf("Paired with %s.", peer->name);
         if (known) vv_peer_ref_free(peer);
         else { g_ptr_array_add(c->multi_machine.peers, peer); save(); }
-        char *m = g_strdup_printf("Paired with %s.", peer->name);
         pair_set_status(m); g_free(m);
         rebuild();
     } else {
@@ -614,6 +614,7 @@ static void on_pair_done(VvPeer *peer, const char *error, gpointer user) {
 }
 
 static void on_pair_clicked(GtkButton *b, gpointer d) {
+    if (!pair_address_row) return;
     const char *address = gtk_editable_get_text(GTK_EDITABLE(pair_address_row));
     if (!address || !*address) return;
     pair_set_status("Connecting…");
@@ -691,10 +692,18 @@ static AdwPreferencesPage *page_multimachine(void) {
 
 /* -------------------------------------------------------- dialog */
 
-static void on_closed(AdwDialog *d, gpointer data) { dialog = NULL; for (int i = 0; i < 6; i++) current_pages[i] = NULL; }
+static void on_closed(AdwDialog *d, gpointer data) {
+    dialog = NULL;
+    for (int i = 0; i < 6; i++) current_pages[i] = NULL;
+    /* These widgets die with the dialog; a late pairing callback must not touch them. */
+    pair_status_label = NULL; pair_address_row = NULL;
+    /* An armed hotkey capture would otherwise write into a freed profile. */
+    vv_hotkey_engine_cancel_capture(vv_app_controller()->hotkey);
+}
 
 static void rebuild(void) {
     if (!dialog) return;
+    vv_hotkey_engine_cancel_capture(vv_app_controller()->hotkey);
     const char *current = adw_preferences_dialog_get_visible_page_name(dialog);
     char *keep = g_strdup(current ? current : "");
     AdwPreferencesPage *pages[] = { page_providers(), page_dictation(), page_folders(), page_general(), page_multimachine(), page_about() };

@@ -384,6 +384,12 @@ static void test_cleanup(void) {
         vv_json_free(parsed);
         expect(vv_peer_parse_frame(buf, &bad) == NULL && !bad, "peer: incomplete frame is NULL");
         g_byte_array_unref(buf); g_bytes_unref(framed);
+        GByteArray *big = g_byte_array_new();
+        guint8 huge[4] = { 0xFF, 0xFF, 0xFF, 0xFF };
+        g_byte_array_append(big, huge, 4);
+        bad = false;
+        expect(vv_peer_parse_frame(big, &bad) == NULL && bad, "peer: oversized frame rejected");
+        g_byte_array_unref(big);
         GBytes *un = vv_peer_unhex("ab01");
         char *hx = vv_peer_hex(g_bytes_get_data(un, NULL), g_bytes_get_size(un));
         expect(streq(hx, "ab01"), "peer: hex round trip");

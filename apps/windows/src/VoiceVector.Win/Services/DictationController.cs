@@ -29,6 +29,7 @@ namespace VoiceVector.Win.Services
             public DictationProfile Profile;
             public CleanupEngine.EffectiveCleanup Policy;
             public ScreenshotSet Screenshots;
+            public List<WindowInfo> Windows;
             public RouteTarget Route;
             public int Revisions;
         }
@@ -246,6 +247,7 @@ namespace VoiceVector.Win.Services
             {
                 Entry = entry, AudioPath = audioPath, Folder = folder, Config = config,
                 Profile = profile, Policy = policy, Screenshots = _pendingScreenshots,
+                Windows = _pendingWindows,
             };
             ReviewDraft = entry.Cleaned;
             ReviewRoute = null;
@@ -282,7 +284,9 @@ namespace VoiceVector.Win.Services
             var machineName = mm.ResolvedMachineName;
             var contexts = new List<MachineContext>
             {
-                PeerService.LocalContext(machineName, _pendingWindows, _pendingScreenshots),
+                // Never capture screenshots here when the hotkey has screenshot
+                // context off; use only what the dictation already gathered.
+                PeerService.LocalContext(machineName, session.Windows, session.Screenshots, false),
             };
             var peers = mm.Peers.Where(p => p.Address.Length > 0).ToList();
             if (peers.Count > 0)
@@ -305,8 +309,11 @@ namespace VoiceVector.Win.Services
                 try { reply = await client.ChatAsync(CleanupEngine.RouterPrompt, message, images).ConfigureAwait(false); }
                 catch { reply = await client.ChatAsync(CleanupEngine.RouterPrompt, message).ConfigureAwait(false); }
                 var verdict = CleanupEngine.ParseRouterVerdict(reply);
-                if (_review != session) return;
-                ApplyVerdict(verdict, contexts, machineName, peers, session);
+                // Apply on the UI thread so it can't interleave with AcceptReview;
+                // the session check inside runs there too.
+                _dispatcher.Invoke((Action)(() => {
+                    if (_review == session) ApplyVerdict(verdict, contexts, machineName, session);
+                }));
             }
             catch (Exception e)
             {
@@ -317,7 +324,7 @@ namespace VoiceVector.Win.Services
         }
 
         private void ApplyVerdict(CleanupEngine.RouterVerdict verdict, List<MachineContext> contexts,
-                                  string machineName, List<PeerRef> peers, ReviewSession session)
+                                  string machineName, ReviewSession session)
         {
             ReviewRoute = null;
             session.Route = null;
@@ -335,7 +342,8 @@ namespace VoiceVector.Win.Services
             }
             else
             {
-                var peer = peers.FirstOrDefault(p => p.Name == context.Machine);
+                // Resolve the peer by pinned fingerprint, not display name.
+                var peer = session.Config.MultiMachine.Peers.FirstOrDefault(p => p.Fingerprint == context.Fingerprint);
                 if (peer == null) return;
                 var label = (windowLabel != null ? windowLabel + " on " : "") + context.Machine;
                 session.Route = new RouteTarget
@@ -506,7 +514,8 @@ namespace VoiceVector.Win.Services
         public void ReceiveRoutedText(string text, uint window, string machine,
                                       Action<bool, string> done)
         {
-            if (IsBusy) { done(false, "busy dictating"); return; }
+            // Not while recording OR mid-review — a paste would steal focus.
+            if (IsBusy || State == StateKind.Reviewing) { done(false, "busy dictating"); return; }
             var _ = ReceiveRoutedAsync(text, window, machine, done);
         }
 
@@ -515,7 +524,8 @@ namespace VoiceVector.Win.Services
         {
             try
             {
-                if (window != 0) WindowInventory.Activate(window);
+                if (window != 0 && !WindowInventory.Activate(window))
+                    Log.Error("Routed window " + window + " could not be focused; pasting into the foreground window.");
                 await Task.Delay(350).ConfigureAwait(false);
                 var config = _config();
                 var library = _library();
@@ -534,7 +544,11 @@ namespace VoiceVector.Win.Services
                 }
                 library.Save(entry);
                 RaiseLibraryChanged();
-                done(true, "");
+                // Tell the sender the truth: only "pasted" is a real delivery.
+                if (outcome == PasteService.Outcome.CopiedOnly)
+                    done(false, "the receiving machine copied the text to its clipboard instead of pasting");
+                else
+                    done(true, "");
             }
             catch (Exception e)
             {

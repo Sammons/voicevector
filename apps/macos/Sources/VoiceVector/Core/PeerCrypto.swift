@@ -20,15 +20,23 @@ enum PeerCrypto {
         return data
     }
 
-    /// Parses one complete frame from the front of `buffer`; returns the
-    /// object and how many bytes it consumed, nil while incomplete.
-    static func parseFrame(_ buffer: Data) -> (object: [String: Any], consumed: Int)? {
-        guard buffer.count >= 4 else { return nil }
+    enum FrameResult {
+        case incomplete
+        case invalid                    // oversized length or non-object JSON: close
+        case frame([String: Any], consumed: Int)
+    }
+
+    /// Parses one complete frame from the front of `buffer`. Distinguishes a
+    /// still-incomplete frame from an invalid one so the reader never buffers
+    /// forever on a bogus length or wedges on malformed JSON.
+    static func parseFrame(_ buffer: Data) -> FrameResult {
+        guard buffer.count >= 4 else { return .incomplete }
         let length = buffer.prefix(4).reduce(0) { ($0 << 8) | Int($1) }
-        guard length >= 0, length <= maxFrame, buffer.count >= 4 + length else { return nil }
+        guard length >= 0, length <= maxFrame else { return .invalid }
+        guard buffer.count >= 4 + length else { return .incomplete }
         let body = buffer.subdata(in: 4..<(4 + length))
-        guard let object = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] else { return nil }
-        return (object, 4 + length)
+        guard let object = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] else { return .invalid }
+        return .frame(object, consumed: 4 + length)
     }
 
     // MARK: Pairing code (numeric comparison; see docs/multi-machine.md)

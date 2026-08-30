@@ -49,8 +49,10 @@ static GBytes *pem_to_der(const char *pem) {
 }
 
 /* Loads (or creates, once) the identity certificate + key. */
+static GMutex identity_lock;
 static bool ensure_identity(void) {
-    if (identity) return true;
+    g_mutex_lock(&identity_lock);
+    if (identity) { g_mutex_unlock(&identity_lock); return true; }
     char *dir = config_dir();
     char *cert_path = g_build_filename(dir, "peer-cert.pem", NULL);
     char *cert_pem = NULL, *key_pem = vv_secret_get("peer-key");
@@ -102,7 +104,9 @@ static bool ensure_identity(void) {
         g_free(both);
     }
     g_free(cert_pem); g_free(key_pem); g_free(cert_path); g_free(dir);
-    return identity != NULL && identity_fp != NULL;
+    bool ok = identity != NULL && identity_fp != NULL;
+    g_mutex_unlock(&identity_lock);
+    return ok;
 }
 
 char *vv_peer_service_fingerprint_hex(void) {
@@ -129,6 +133,13 @@ static gboolean accept_any_cert(GTlsConnection *c, GTlsCertificate *cert,
 }
 
 /* ------------------------------------------------- frame plumbing */
+
+/* Bound every server-side read so a silent peer cannot latch pairing_busy or
+ * pin a thread forever. Applied to the raw socket before the TLS wrapper. */
+static void set_socket_timeout(GSocketConnection *raw, guint seconds) {
+    GSocket *sock = g_socket_connection_get_socket(raw);
+    if (sock) g_socket_set_timeout(sock, seconds);
+}
 
 static VvJson *read_frame(GIOStream *stream, GByteArray *buffer) {
     GInputStream *in = g_io_stream_get_input_stream(stream);
@@ -255,7 +266,7 @@ static void serve_pairing(GIOStream *tls, GByteArray *buffer, const char *peer_n
         return;
     }
     guint8 nonce[32];
-    for (int i = 0; i < 32; i++) nonce[i] = (guint8)g_random_int_range(0, 256);
+    vv_peer_random_nonce(nonce);
     VvJson *hello = msg("hello");
     vv_json_object_set(hello, "ver", vv_json_number(1));
     vv_json_object_set(hello, "name", vv_json_string(vv_multi_machine_name(&config->multi_machine)));
@@ -342,9 +353,14 @@ static void serve_peer(GIOStream *tls, GByteArray *buffer, GBytes *client_fp) {
         VvJson *reply = msg("context");
         vv_json_object_set(reply, "machine", vv_json_string(vv_multi_machine_name(&config->multi_machine)));
         VvJson *screens = vv_json_array();
+        gsize screens_bytes = 0;
         if (ctx) {
             for (guint i = 0; i < ctx->screens->len; i++) {
                 VvScreenshot *shot = g_ptr_array_index(ctx->screens, i);
+                gsize shot_n = g_bytes_get_size(shot->jpeg);
+                /* Keep the whole reply well under VV_PEER_MAX_FRAME (32 MB). */
+                if (screens_bytes + shot_n * 2 > 24u * 1024 * 1024) break;
+                screens_bytes += shot_n * 2;
                 gsize n; const guchar *data = g_bytes_get_data(shot->jpeg, &n);
                 char *b64 = g_base64_encode(data, n);
                 VvJson *sj = vv_json_object();
@@ -382,6 +398,7 @@ static void serve_peer(GIOStream *tls, GByteArray *buffer, GBytes *client_fp) {
 
 static gpointer serve_thread(gpointer data) {
     GSocketConnection *raw = data;
+    set_socket_timeout(raw, 30);
     GError *error = NULL;
     GIOStream *tls = g_tls_server_connection_new(G_IO_STREAM(raw), identity, &error);
     if (!tls) {
@@ -469,6 +486,7 @@ static GIOStream *open_session(const char *address, const char *purpose,
     GSocketConnection *raw = g_socket_client_connect_to_host(client, host, (guint16)port, NULL, &gerr);
     g_object_unref(client);
     g_free(host);
+    if (raw) set_socket_timeout(raw, 15);
     if (!raw) {
         *error_out = g_strdup(gerr ? gerr->message : "could not connect");
         if (gerr) g_error_free(gerr);
@@ -559,7 +577,7 @@ static gpointer pair_thread(gpointer data) {
     GIOStream *tls = open_session(t->address, "pair", &raw, &buffer, &server_name, &server_fp, &t->error);
     if (!tls) { g_idle_add(pair_task_done_on_main, t); return NULL; }
     guint8 nonce[32];
-    for (int i = 0; i < 32; i++) nonce[i] = (guint8)g_random_int_range(0, 256);
+    vv_peer_random_nonce(nonce);
     VvJson *commit = msg("commit");
     char *my_commit = vv_peer_commitment(nonce, 32);
     vv_json_object_set(commit, "h", vv_json_string(my_commit));
@@ -587,16 +605,16 @@ static gpointer pair_thread(gpointer data) {
         }
         g_free(their_commit);
     }
-    if (!their_nonce) {
+    GBytes *server_fp_bytes = vv_peer_unhex(server_fp);
+    if (!their_nonce || !server_fp_bytes || g_bytes_get_size(server_fp_bytes) != 32) {
         t->error = g_strdup("pairing failed");
+        if (server_fp_bytes) g_bytes_unref(server_fp_bytes);
+        if (their_nonce) g_bytes_unref(their_nonce);
     } else {
-        GBytes *server_fp_bytes = vv_peer_unhex(server_fp);
         t->code = vv_peer_pairing_code(g_bytes_get_data(identity_fp, NULL),
                                        g_bytes_get_data(server_fp_bytes, NULL),
                                        nonce, g_bytes_get_data(their_nonce, NULL));
-        g_bytes_unref(server_fp_bytes);
         g_bytes_unref(their_nonce);
-        g_mutex_init(&t->answer.lock); g_cond_init(&t->answer.cond);
         g_idle_add(pair_task_code_on_main, t);
         g_mutex_lock(&t->answer.lock);
         while (!t->answer.done) g_cond_wait(&t->answer.cond, &t->answer.lock);
@@ -632,6 +650,7 @@ void vv_peer_service_pair_async(const char *address, VvPeerCodeFn on_code,
     PairTask *t = g_new0(PairTask, 1);
     t->address = g_strdup(address);
     t->on_code = on_code; t->done = done; t->user = user;
+    g_mutex_init(&t->answer.lock); g_cond_init(&t->answer.cond);
     GThread *th = g_thread_new("vv-peer-pair", pair_thread, t);
     g_thread_unref(th);
 }

@@ -124,7 +124,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setUpPeering() {
         let service = PeerService.shared
-        service.configProvider = { [weak self] in self?.state.config.multiMachine ?? MultiMachineConfig() }
         service.addPeer = { [weak self] peer in
             guard let self else { return }
             if !self.state.config.multiMachine.peers.contains(where: { $0.fingerprint == peer.fingerprint }) {
@@ -133,26 +132,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         service.onDeliver = { [weak self] text, window, done in
             guard let self else { done(false, "not ready"); return }
-            let machine = "a paired machine"
-            self.state.dictation.receiveRoutedText(text, window: window, from: machine, completion: done)
+            self.state.dictation.receiveRoutedText(text, window: window, from: "a paired machine", completion: done)
         }
         service.onIncomingPair = { [weak self] name, code, answer in
             guard let self else { answer(false); return }
-            self.showWindow()
-            let alert = NSAlert()
-            alert.messageText = "Pair with “\(name)”?"
-            alert.informativeText = "Confirm only if the other machine shows this code:\n\n\(code.prefix(3)) \(code.suffix(3))"
-            alert.addButton(withTitle: "They Match — Pair")
-            alert.addButton(withTitle: "Cancel")
-            answer(alert.runModal() == .alertFirstButtonReturn)
+            self.presentPairingConfirmation(name: name, code: code, answer: answer)
         }
-        service.applyConfig()
+        service.updateConfig(state.config.multiMachine)
         state.$config
             .map(\.multiMachine)
             .removeDuplicates()
             .receive(on: DispatchQueue.main)
-            .sink { _ in PeerService.shared.applyConfig() }
+            .sink { PeerService.shared.updateConfig($0) }
             .store(in: &cancellables)
+    }
+
+    /// Non-blocking pairing prompt: a sheet on the main window (never a modal
+    /// that freezes the app), with Cancel as the default so a stray Return
+    /// can't accept an unexpected pairing request.
+    private func presentPairingConfirmation(name: String, code: String,
+                                            answer: @escaping (Bool) -> Void) {
+        showWindow()
+        let alert = NSAlert()
+        alert.messageText = "Pair with “\(name)”?"
+        alert.informativeText = "Confirm only if the other machine shows this code:\n\n\(code.prefix(3)) \(code.suffix(3))"
+        let pair = alert.addButton(withTitle: "They Match — Pair")
+        let cancel = alert.addButton(withTitle: "Cancel")
+        pair.keyEquivalent = ""          // not the default; deliberate click required
+        cancel.keyEquivalent = "\r"
+        alert.beginSheetModal(for: window) { response in
+            answer(response == .alertFirstButtonReturn)
+        }
     }
 
     // MARK: Status item

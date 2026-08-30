@@ -6,6 +6,7 @@ import Security
 struct MachineContext {
     let machine: String
     let isLocal: Bool
+    var fingerprint: String = ""       // the pinned peer fingerprint (empty when local)
     let windows: [WindowInfo]          // empty for peers that can't enumerate
     let windowLines: String            // pre-rendered "id: App — Title" lines
     let screens: [ScreenshotAttachment]
@@ -18,7 +19,10 @@ final class PeerService {
 
     /// Wired by the app: current config, persisting a discovered peer, and
     /// handling an inbound delivery (activate window + paste + save).
-    var configProvider: (() -> MultiMachineConfig)?
+    /// Push config from the main actor; internal reads use the queue-confined
+    /// snapshot so handlers never touch @MainActor AppState across threads.
+    private var mmConfig = MultiMachineConfig()
+    func updateConfig(_ mm: MultiMachineConfig) { queue.async { self.mmConfig = mm; self.applyLocked() } }
     var addPeer: ((PeerRef) -> Void)?
     var onDeliver: ((String, UInt32, @escaping (Bool, String) -> Void) -> Void)?
     /// Inbound pairing UI: (peer name, code, answer) — call answer(true/false).
@@ -30,30 +34,36 @@ final class PeerService {
     private var secIdentity: SecIdentity?
     private var pairingBusy = false
 
-    private var config: MultiMachineConfig { configProvider?() ?? MultiMachineConfig() }
+    /// Queue-confined; only read on `queue`.
+    private var config: MultiMachineConfig { mmConfig }
+    /// Valid TCP port, clamped (the Settings field is unconstrained).
+    private func clampedPort(_ port: Int) -> UInt16 { UInt16(clamping: max(1, min(65535, port))) }
 
     var fingerprintHex: String { identity?.fingerprintHex ?? "" }
 
     // MARK: Lifecycle
 
-    /// Starts/stops the listener to match the config. Safe to call often.
-    func applyConfig() {
-        let mm = config
-        queue.async { [self] in
-            guard mm.enabled else { stopLocked(); return }
-            if identity == nil {
-                let dir = ConfigStore.defaultURL.deletingLastPathComponent()
-                identity = PeerCrypto.loadIdentity(machineName: mm.resolvedMachineName, directory: dir)
-                if let identity { secIdentity = PeerCrypto.secIdentity(for: identity) }
-            }
-            guard identity != nil, secIdentity != nil else {
-                Log.error("Multi-machine: no identity — listener not started")
-                return
-            }
-            if let listener, listener.port?.rawValue == UInt16(mm.port) { return }
-            stopLocked()
-            startListenerLocked(port: UInt16(mm.port))
+    /// Starts/stops the listener to match the config. Runs on `queue`.
+    func applyConfig() { queue.async { [self] in applyLocked() } }
+
+    private func ensureIdentityLocked() {
+        guard identity == nil else { return }
+        let dir = ConfigStore.defaultURL.deletingLastPathComponent()
+        identity = PeerCrypto.loadIdentity(machineName: mmConfig.resolvedMachineName, directory: dir)
+        if let identity { secIdentity = PeerCrypto.secIdentity(for: identity) }
+    }
+
+    private func applyLocked() {
+        guard mmConfig.enabled else { stopLocked(); return }
+        ensureIdentityLocked()
+        guard identity != nil, secIdentity != nil else {
+            Log.error("Multi-machine: no identity — listener not started")
+            return
         }
+        let port = clampedPort(mmConfig.port)
+        if let listener, listener.port?.rawValue == port { return }
+        stopLocked()
+        startListenerLocked(port: port)
     }
 
     private func stopLocked() {
@@ -122,22 +132,42 @@ final class PeerService {
 
     private func readFrame(_ connection: NWConnection, _ reader: FrameReader,
                            handler: @escaping ([String: Any]?) -> Void) {
-        if let parsed = PeerCrypto.parseFrame(reader.buffer) {
-            reader.buffer.removeSubrange(0..<parsed.consumed)
-            handler(parsed.object)
+        switch PeerCrypto.parseFrame(reader.buffer) {
+        case .frame(let object, let consumed):
+            reader.buffer.removeSubrange(0..<consumed)
+            handler(object)
             return
+        case .invalid:
+            connection.cancel(); handler(nil); return
+        case .incomplete:
+            break
         }
         connection.receive(minimumIncompleteLength: 1, maximumLength: 1 << 20) { [weak self] data, _, done, error in
             guard let self else { return }
             if let data { reader.buffer.append(data) }
-            if let parsed = PeerCrypto.parseFrame(reader.buffer) {
-                reader.buffer.removeSubrange(0..<parsed.consumed)
-                handler(parsed.object)
-            } else if done || error != nil {
-                handler(nil)
-            } else {
-                self.readFrame(connection, reader, handler: handler)
+            // Never let a peer balloon our memory: the biggest legit frame is
+            // one screenshot context, well under maxFrame.
+            if reader.buffer.count > PeerCrypto.maxFrame {
+                connection.cancel(); handler(nil); return
             }
+            switch PeerCrypto.parseFrame(reader.buffer) {
+            case .frame(let object, let consumed):
+                reader.buffer.removeSubrange(0..<consumed)
+                handler(object)
+            case .invalid:
+                connection.cancel(); handler(nil)
+            case .incomplete:
+                if done || error != nil { handler(nil) }
+                else { self.readFrame(connection, reader, handler: handler) }
+            }
+        }
+    }
+
+    /// Cancels a connection that has not finished its single request/response
+    /// within `seconds` — no post-handshake hang can wedge the app.
+    private func armTimeout(_ connection: NWConnection, seconds: Double = 20) {
+        queue.asyncAfter(deadline: .now() + seconds) { [weak connection] in
+            connection?.cancel()
         }
     }
 
@@ -151,8 +181,17 @@ final class PeerService {
 
     private func serve(_ connection: NWConnection) {
         let reader = FrameReader()
+        armTimeout(connection, seconds: 120)   // long enough for a human to compare codes
         connection.stateUpdateHandler = { [weak self] state in
-            guard let self, case .ready = state else { return }
+            guard let self else { return }
+            switch state {
+            case .failed, .cancelled:
+                connection.cancel(); return
+            case .ready:
+                break
+            default:
+                return
+            }
             self.readFrame(connection, reader) { hello in
                 guard let hello, hello["t"] as? String == "hello",
                       let purpose = hello["purpose"] as? String else { connection.cancel(); return }
@@ -176,7 +215,8 @@ final class PeerService {
             connection.cancel(); return
         }
         pairingBusy = true
-        let unbusy = { self.queue.async { self.pairingBusy = false } }
+        var released = false
+        let unbusy = { self.queue.async { if !released { released = true; self.pairingBusy = false } } }
         var nonce = Data(count: 32)
         _ = nonce.withUnsafeMutableBytes { SecRandomCopyBytes(kSecRandomDefault, 32, $0.baseAddress!) }
         send(connection, ["t": "hello", "ver": 1, "name": config.resolvedMachineName])
@@ -221,7 +261,8 @@ final class PeerService {
     }
 
     private func servePeer(_ connection: NWConnection, _ reader: FrameReader, peerName: String) {
-        guard let fingerprint = peerFingerprint(of: connection),
+        guard config.enabled,
+              let fingerprint = peerFingerprint(of: connection),
               let peer = config.peers.first(where: { $0.fingerprint == fingerprint }) else {
             send(connection, ["t": "err", "err": "untrusted"]) { connection.cancel() }
             return
@@ -281,15 +322,16 @@ final class PeerService {
             host = String(address[..<colon])
             port = Int(address[address.index(after: colon)...]) ?? defaultPort
         }
-        guard !host.isEmpty, let nwPort = NWEndpoint.Port(rawValue: UInt16(clamping: port)) else { return nil }
+        guard !host.isEmpty, port > 0, port <= 65535,
+              let nwPort = NWEndpoint.Port(rawValue: UInt16(clamping: port)) else { return nil }
         return .hostPort(host: NWEndpoint.Host(host), port: nwPort)
     }
 
     /// Connects, sends hello, hands over once the server's hello arrives.
     private func openSession(address: String, purpose: String,
                              completion: @escaping (NWConnection?, FrameReader, String, String) -> Void) {
-        applyConfig()   // make sure the identity exists even with the listener off
         queue.async { [self] in
+            ensureIdentityLocked()   // identity is needed even with the listener off
             guard let endpoint = endpoint(for: address, defaultPort: config.port),
                   let parameters = tlsParameters(expectFingerprint: nil) else {
                 DispatchQueue.main.async { completion(nil, FrameReader(), "", "bad address") }
@@ -415,7 +457,8 @@ final class PeerService {
                         return WindowInfo(id: id, app: w["app"] as? String ?? "?",
                                           title: w["title"] as? String ?? "", pid: 0)
                     }
-                    let context = MachineContext(machine: machine, isLocal: false, windows: windows,
+                    let context = MachineContext(machine: machine, isLocal: false, fingerprint: peer.fingerprint,
+                                                 windows: windows,
                                                  windowLines: WindowInventory.describe(windows), screens: screens)
                     DispatchQueue.main.async { completion(context) }
                 }
@@ -445,11 +488,13 @@ final class PeerService {
         }
     }
 
-    /// This machine's context (windows + screenshots), captioned for the router.
+    /// This machine's context, captioned for the router. `captureScreens`
+    /// controls whether missing screenshots are grabbed now (peer context
+    /// requests: yes; a router hotkey with screenshot context off: no).
     static func localContext(machineName: String, windows: [WindowInfo]? = nil,
-                             screens: ScreenshotSet? = nil) -> MachineContext {
+                             screens: ScreenshotSet? = nil, captureScreens: Bool = true) -> MachineContext {
         let list = windows ?? WindowInventory.list()
-        let set = screens ?? ScreenCapture.allScreens()
+        let set = screens ?? (captureScreens ? ScreenCapture.allScreens() : nil)
         let attachments = (set?.attachments ?? []).map {
             ScreenshotAttachment(jpeg: $0.jpeg, caption: "Machine \"\(machineName)\" — " + $0.caption)
         }

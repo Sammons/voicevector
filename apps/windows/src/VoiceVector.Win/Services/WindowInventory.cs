@@ -63,7 +63,9 @@ namespace VoiceVector.Win.Services
         /// <summary>Brings the window to the foreground; false when it is gone.</summary>
         public static bool Activate(uint id)
         {
-            var hwnd = new IntPtr(id);
+            // HWNDs carry 32 significant bits and widen by SIGN-extension on
+            // Win64; new IntPtr(uint) would zero-extend, so cast through int.
+            var hwnd = new IntPtr(unchecked((int)id));
             if (!IsWindowVisible(hwnd)) return false;
             if (IsIconic(hwnd)) ShowWindow(hwnd, SW_RESTORE);
             return SetForegroundWindow(hwnd);

@@ -1,5 +1,22 @@
 #include "core/peer.h"
 #include <string.h>
+#include <sys/random.h>
+#include <stdio.h>
+
+void vv_peer_random_nonce(uint8_t out[32]) {
+    gsize got = 0;
+    while (got < 32) {
+        ssize_t n = getrandom(out + got, 32 - got, 0);
+        if (n <= 0) {
+            /* getrandom unavailable/interrupted: fall back to /dev/urandom. */
+            FILE *f = fopen("/dev/urandom", "rb");
+            if (f) { got += fread(out + got, 1, 32 - got, f); fclose(f); }
+            if (got < 32) { for (gsize i = got; i < 32; i++) out[i] = (uint8_t)g_random_int(); return; }
+            return;
+        }
+        got += (gsize)n;
+    }
+}
 
 GBytes *vv_peer_frame(VvJson *obj_take) {
     char *body = vv_json_write(obj_take, 0);

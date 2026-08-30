@@ -594,6 +594,17 @@ void vv_controller_apply_command(VvController *c, char *path) {
     g_thread_unref(th);
 }
 
+/* Snapshot a peer's identity so worker threads never dereference the live
+ * config array (which the settings UI can mutate/free mid-routing). */
+static VvPeer *peer_copy(const VvPeer *src) {
+    VvPeer *p = vv_peer_ref_new();
+    g_free(p->name); p->name = g_strdup(src->name);
+    g_free(p->fingerprint); p->fingerprint = g_strdup(src->fingerprint);
+    g_free(p->address); p->address = g_strdup(src->address);
+    p->allow_screens = src->allow_screens; p->allow_deliver = src->allow_deliver;
+    return p;
+}
+
 static void review_free(Review *r) {
     vv_entry_free(r->entry); g_free(r->audio_path); g_free(r->folder); g_free(r->profile_id);
     vv_screenshot_set_unref(r->screenshots);
@@ -602,7 +613,7 @@ static void review_free(Review *r) {
 }
 
 /* Remote delivery of an accepted, routed draft (worker thread + idle). */
-typedef struct { VvController *c; Review *r; char *error; } RouteDeliverTask;
+typedef struct { VvController *c; Review *r; VvPeer *peer; char *error; } RouteDeliverTask;
 
 static gboolean route_deliver_done(gpointer data) {
     RouteDeliverTask *t = data;
@@ -626,19 +637,15 @@ static gboolean route_deliver_done(gpointer data) {
         }
     }
     review_free(r);
+    if (t->peer) vv_peer_ref_free(t->peer);
     g_free(t->error); g_free(t);
     return G_SOURCE_REMOVE;
 }
 
 static gpointer route_deliver_thread(gpointer data) {
     RouteDeliverTask *t = data;
-    VvPeer *peer = NULL;
-    for (guint i = 0; i < t->c->config->multi_machine.peers->len; i++) {
-        VvPeer *p2 = g_ptr_array_index(t->c->config->multi_machine.peers, i);
-        if (g_strcmp0(p2->fingerprint, t->r->route_peer_fp) == 0) { peer = p2; break; }
-    }
-    t->error = peer ? vv_peer_service_deliver(peer, t->r->entry->cleaned, t->r->route_window)
-                    : g_strdup("peer is gone");
+    t->error = t->peer ? vv_peer_service_deliver(t->peer, t->r->entry->cleaned, t->r->route_window)
+                       : g_strdup("peer is gone");
     g_idle_add(route_deliver_done, t);
     return NULL;
 }
@@ -662,8 +669,13 @@ static void end_review(VvController *c, bool paste) {
         char *m = g_strdup_printf("Sending to %s…", r->route_label);
         set_state(c, VV_STATE_PROCESSING, m);
         g_free(m);
+        VvPeer *target = NULL;
+        for (guint i = 0; i < c->config->multi_machine.peers->len; i++) {
+            VvPeer *p2 = g_ptr_array_index(c->config->multi_machine.peers, i);
+            if (g_strcmp0(p2->fingerprint, r->route_peer_fp) == 0) { target = p2; break; }
+        }
         RouteDeliverTask *t = g_new0(RouteDeliverTask, 1);
-        t->c = c; t->r = r;
+        t->c = c; t->r = r; t->peer = target ? peer_copy(target) : NULL;
         GThread *th = g_thread_new("vv-route-deliver", route_deliver_thread, t);
         g_thread_unref(th);
         return;
@@ -704,9 +716,9 @@ typedef struct {
     VvController *c;
     Review *r;                     /* checked against p->review before use */
     char *draft;
-    char *router_provider_id;      /* or NULL */
-    char *review_provider_id;
-    char *cleanup_provider_id;     /* effective fallback chain */
+    VvProvider *provider;          /* owned snapshot resolved on the main thread */
+    char *machine_name;            /* owned */
+    GPtrArray *peers;              /* owned VvPeer* snapshots */
     VvScreenshotSet *screens;
     /* results */
     char *route_label, *route_peer_fp;
@@ -726,8 +738,9 @@ static gboolean router_done(gpointer data) {
         t->r->route_window = t->route_window;
         set_state(c, VV_STATE_REVIEWING, NULL);
     }
-    g_free(t->draft); g_free(t->router_provider_id); g_free(t->review_provider_id);
-    g_free(t->cleanup_provider_id);
+    g_free(t->draft); g_free(t->machine_name);
+    if (t->provider) vv_provider_free(t->provider);
+    if (t->peers) g_ptr_array_unref(t->peers);
     vv_screenshot_set_unref(t->screens);
     g_free(t->route_label); g_free(t->route_peer_fp); g_free(t->route_display);
     g_free(t);
@@ -736,24 +749,14 @@ static gboolean router_done(gpointer data) {
 
 static gpointer router_thread(gpointer data) {
     RouterTask *t = data;
-    VvController *c = t->c;
-    VvConfig *cfg = c->config;
-    const char *ids[] = { t->router_provider_id, t->review_provider_id, t->cleanup_provider_id };
-    VvProvider *provider = NULL;
-    for (int i = 0; i < 3 && !provider; i++)
-        if (ids[i]) { VvProvider *p2 = vv_config_find_provider(cfg, ids[i]);
-                      if (p2 && vv_kind_supports_chat(p2->kind) && *p2->chat_model) provider = p2; }
-    for (guint i = 0; !provider && i < cfg->providers->len; i++) {
-        VvProvider *p2 = g_ptr_array_index(cfg->providers, i);
-        if (vv_kind_supports_chat(p2->kind) && *p2->chat_model) provider = p2;
-    }
+    VvProvider *provider = t->provider;
     if (!provider) { g_idle_add(router_done, t); return NULL; }
-    const char *machine_name = vv_multi_machine_name(&cfg->multi_machine);
+    /* Local context is captured on the main thread and passed in; peers are
+     * snapshots, so nothing here touches the live config. */
     GPtrArray *contexts = g_ptr_array_new_with_free_func((GDestroyNotify)vv_machine_context_free);
-    g_ptr_array_add(contexts, vv_peer_service_local_context(machine_name, t->screens));
-    for (guint i = 0; i < cfg->multi_machine.peers->len; i++) {
-        VvPeer *peer = g_ptr_array_index(cfg->multi_machine.peers, i);
-        VvMachineContext *ctx = vv_peer_service_fetch_context(peer);
+    g_ptr_array_add(contexts, vv_peer_service_local_context(t->machine_name, t->screens));
+    for (guint i = 0; i < t->peers->len; i++) {
+        VvMachineContext *ctx = vv_peer_service_fetch_context(g_ptr_array_index(t->peers, i));
         if (ctx) g_ptr_array_add(contexts, ctx);
     }
     GPtrArray *machines = g_ptr_array_new_with_free_func((GDestroyNotify)vv_router_machine_free);
@@ -777,8 +780,8 @@ static gpointer router_thread(gpointer data) {
             for (guint i = 0; i < contexts->len; i++) {
                 VvMachineContext *ctx = g_ptr_array_index(contexts, i);
                 if (g_strcmp0(ctx->machine, machine) != 0 || ctx->is_local) continue;
-                for (guint k = 0; k < cfg->multi_machine.peers->len; k++) {
-                    VvPeer *peer = g_ptr_array_index(cfg->multi_machine.peers, k);
+                for (guint k = 0; k < t->peers->len; k++) {
+                    VvPeer *peer = g_ptr_array_index(t->peers, k);
                     if (g_strcmp0(peer->name, ctx->machine) == 0) {
                         t->route_peer_fp = g_strdup(peer->fingerprint);
                         t->route_label = g_strdup(ctx->machine);
@@ -801,14 +804,28 @@ static gpointer router_thread(gpointer data) {
 
 static void start_router(VvController *c, Review *r, VvProfile *profile) {
     VvEffective eff = vv_effective(profile, c->config);
+    /* Resolve the router provider on the main thread (router → review →
+     * effective cleanup → first chat provider) and snapshot it + the peers. */
+    const char *ids[] = { profile->router_provider_id, profile->review_provider_id,
+                          eff.provider ? eff.provider->id : NULL };
+    VvProvider *chosen = NULL;
+    for (int i = 0; i < 3 && !chosen; i++)
+        if (ids[i]) { VvProvider *p2 = vv_config_find_provider(c->config, ids[i]);
+                      if (p2 && vv_kind_supports_chat(p2->kind) && *p2->chat_model) chosen = p2; }
+    for (guint i = 0; !chosen && i < c->config->providers->len; i++) {
+        VvProvider *p2 = g_ptr_array_index(c->config->providers, i);
+        if (vv_kind_supports_chat(p2->kind) && *p2->chat_model) chosen = p2;
+    }
+    vv_effective_clear(&eff);
     RouterTask *t = g_new0(RouterTask, 1);
     t->c = c; t->r = r;
     t->draft = g_strdup(r->entry->cleaned);
-    t->router_provider_id = g_strdup(profile->router_provider_id);
-    t->review_provider_id = g_strdup(profile->review_provider_id);
-    t->cleanup_provider_id = eff.provider ? g_strdup(eff.provider->id) : NULL;
+    t->machine_name = g_strdup(vv_multi_machine_name(&c->config->multi_machine));
+    if (chosen) { VvJson *pj = vv_provider_to_json(chosen); t->provider = vv_provider_from_json(pj); vv_json_free(pj); }
+    t->peers = g_ptr_array_new_with_free_func((GDestroyNotify)vv_peer_ref_free);
+    for (guint i = 0; i < c->config->multi_machine.peers->len; i++)
+        g_ptr_array_add(t->peers, peer_copy(g_ptr_array_index(c->config->multi_machine.peers, i)));
     t->screens = vv_screenshot_set_ref(r->screenshots);
-    vv_effective_clear(&eff);
     GThread *th = g_thread_new("vv-router", router_thread, t);
     g_thread_unref(th);
 }

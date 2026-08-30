@@ -24,5 +24,7 @@ char *vv_peer_pairing_code(const uint8_t *fp_client, const uint8_t *fp_server,
 
 char *vv_peer_commitment(const uint8_t *nonce, gsize n);      /* hex SHA-256 */
 GBytes *vv_peer_fingerprint(GBytes *certificate_der);          /* 32-byte SHA-256 */
+/* 32 cryptographically-random bytes (getrandom/urandom), for pairing nonces. */
+void vv_peer_random_nonce(uint8_t out[32]);
 char *vv_peer_hex(const uint8_t *bytes, gsize n);
 GBytes *vv_peer_unhex(const char *hex);                        /* NULL on bad input */

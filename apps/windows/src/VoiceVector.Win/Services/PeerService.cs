@@ -17,6 +17,7 @@ namespace VoiceVector.Win.Services
     {
         public string Machine = "";
         public bool IsLocal;
+        public string Fingerprint = "";     // the pinned peer fingerprint (empty when local)
         public List<WindowInfo> Windows = new List<WindowInfo>();
         public string WindowLines = "";
         public IList<ScreenshotAttachment> Screens = new List<ScreenshotAttachment>();
@@ -39,7 +40,7 @@ namespace VoiceVector.Win.Services
         private TcpListener _listener;
         private int _listenPort = -1;
         private X509Certificate2 _certificate;
-        private bool _pairingBusy;
+        private int _pairingBusy;   // 0/1 via Interlocked
 
         private MultiMachineConfig Config
         {
@@ -88,28 +89,48 @@ namespace VoiceVector.Win.Services
             {
                 TcpClient client;
                 try { client = await listener.AcceptTcpClientAsync().ConfigureAwait(false); }
-                catch { break; }
+                catch (ObjectDisposedException) { break; }   // Stop() was called
+                catch (Exception e)
+                {
+                    if (_listener != listener) break;
+                    Log.Error("Peer accept failed: " + e.Message);
+                    await Task.Delay(200).ConfigureAwait(false);
+                    continue;
+                }
                 var _ = Task.Run(() => ServeAsync(client));
             }
         }
 
         // -- frame plumbing over SslStream -----------------------------------
 
+        private static async Task<bool> ReadExactAsync(SslStream stream, byte[] into, int count)
+        {
+            int got = 0;
+            while (got < count)
+            {
+                int n;
+                try { n = await stream.ReadAsync(into, got, count - got).ConfigureAwait(false); }
+                catch { return false; }
+                if (n <= 0) return false;
+                got += n;
+            }
+            return true;
+        }
+
+        // Length-prefixed read: 4-byte big-endian length, then exactly that many
+        // bytes. No repeated buffer scans, and an oversized length is rejected
+        // before a single byte of body is allocated (the `buffer` param is
+        // unused now but kept for call-site compatibility).
         private static async Task<Dictionary<string, object>> ReadFrameAsync(SslStream stream, List<byte> buffer)
         {
-            var chunk = new byte[65536];
-            while (true)
-            {
-                int consumed;
-                var obj = PeerCrypto.ParseFrame(buffer, out consumed);
-                if (consumed > 0) { buffer.RemoveRange(0, consumed); return obj; }
-                if (consumed < 0) return null;
-                int n;
-                try { n = await stream.ReadAsync(chunk, 0, chunk.Length).ConfigureAwait(false); }
-                catch { return null; }
-                if (n <= 0) return null;
-                for (int i = 0; i < n; i++) buffer.Add(chunk[i]);
-            }
+            var header = new byte[4];
+            if (!await ReadExactAsync(stream, header, 4).ConfigureAwait(false)) return null;
+            int length = (header[0] << 24) | (header[1] << 16) | (header[2] << 8) | header[3];
+            if (length < 0 || length > PeerCrypto.MaxFrame) return null;
+            var body = new byte[length];
+            if (!await ReadExactAsync(stream, body, length).ConfigureAwait(false)) return null;
+            var obj = Json.Parse(System.Text.Encoding.UTF8.GetString(body)) as Dictionary<string, object>;
+            return obj;
         }
 
         private static Task SendAsync(SslStream stream, Dictionary<string, object> obj)
@@ -122,9 +143,13 @@ namespace VoiceVector.Win.Services
 
         private async Task ServeAsync(TcpClient client)
         {
+            // Async reads ignore Socket.ReceiveTimeout, so guard the whole
+            // connection with a watchdog that closes the socket (which faults
+            // any pending ReadAsync). 120s leaves a human time to compare codes.
+            var watchdog = new System.Threading.CancellationTokenSource(120000);
+            watchdog.Token.Register(() => { try { client.Close(); } catch { } });
             try
             {
-                client.ReceiveTimeout = client.SendTimeout = 60000;
                 using (var ssl = new SslStream(client.GetStream(), false, (s, cert, chain, err) => cert != null))
                 {
                     await ssl.AuthenticateAsServerAsync(_certificate, true,
@@ -149,18 +174,19 @@ namespace VoiceVector.Win.Services
             }
             finally
             {
+                watchdog.Dispose();
                 try { client.Close(); } catch { }
             }
         }
 
         private async Task ServePairingAsync(SslStream ssl, List<byte> buffer, string peerName, byte[] clientFp)
         {
-            if (_pairingBusy || OnIncomingPair == null)
+            if (OnIncomingPair == null
+                || System.Threading.Interlocked.CompareExchange(ref _pairingBusy, 1, 0) != 0)
             {
                 await SendAsync(ssl, new Dictionary<string, object> { { "t", "err" }, { "err", "busy" } }).ConfigureAwait(false);
                 return;
             }
-            _pairingBusy = true;
             try
             {
                 var nonce = new byte[32];
@@ -196,14 +222,15 @@ namespace VoiceVector.Win.Services
             }
             finally
             {
-                _pairingBusy = false;
+                System.Threading.Interlocked.Exchange(ref _pairingBusy, 0);
             }
         }
 
         private async Task ServePeerAsync(SslStream ssl, List<byte> buffer, byte[] remoteFp)
         {
+            var mm = Config;
             var fingerprint = PeerCrypto.ToHex(remoteFp);
-            var peer = Config.Peers.FirstOrDefault(p => p.Fingerprint == fingerprint);
+            var peer = mm.Enabled ? mm.Peers.FirstOrDefault(p => p.Fingerprint == fingerprint) : null;
             if (peer == null)
             {
                 await SendAsync(ssl, new Dictionary<string, object> { { "t", "err" }, { "err", "untrusted" } }).ConfigureAwait(false);
@@ -275,6 +302,8 @@ namespace VoiceVector.Win.Services
                 if (int.TryParse(address.Substring(colon + 1), out parsed)) port = parsed;
             }
             var client = new TcpClient();
+            var watchdog = new System.Threading.CancellationTokenSource(20000);
+            watchdog.Token.Register(() => { try { client.Close(); } catch { } });
             try
             {
                 var connect = client.ConnectAsync(host, port);
@@ -298,6 +327,7 @@ namespace VoiceVector.Win.Services
             }
             catch
             {
+                watchdog.Dispose();
                 try { client.Close(); } catch { }
                 throw;
             }
@@ -361,7 +391,7 @@ namespace VoiceVector.Win.Services
                     var response = await ReadFrameAsync(session.Item2, session.Item3).ConfigureAwait(false);
                     if (response == null || Json.Str(response, "t") != "context") return null;
                     var machine = Json.Str(response, "machine", peer.Name);
-                    var context = new MachineContext { Machine = machine, IsLocal = false };
+                    var context = new MachineContext { Machine = machine, IsLocal = false, Fingerprint = peer.Fingerprint };
                     foreach (var item in Json.Arr(response, "screens") ?? new List<object>())
                         if (item is Dictionary<string, object> s)
                             context.Screens.Add(new ScreenshotAttachment
@@ -415,10 +445,10 @@ namespace VoiceVector.Win.Services
 
         /// <summary>This machine's context, captioned for the router.</summary>
         public static MachineContext LocalContext(string machineName, List<WindowInfo> windows,
-                                                  ScreenshotSet screens)
+                                                  ScreenshotSet screens, bool captureScreens = true)
         {
             var list = windows ?? WindowInventory.List();
-            var set = screens ?? ScreenCapture.AllScreens();
+            var set = screens ?? (captureScreens ? ScreenCapture.AllScreens() : null);
             var attachments = new List<ScreenshotAttachment>();
             if (set != null)
                 foreach (var shot in set.Attachments())

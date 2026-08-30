@@ -354,6 +354,9 @@ namespace VoiceVector.SelfTest
             int none;
             Expect(PeerCrypto.ParseFrame(new List<byte> { 0, 0 }, out none) == null && none == 0,
                    "peer: incomplete frame is null");
+            int bad;
+            Expect(PeerCrypto.ParseFrame(new List<byte> { 0xFF, 0xFF, 0xFF, 0xFF }, out bad) == null && bad == -1,
+                   "peer: oversized frame rejected");
             Expect(PeerCrypto.ToHex(PeerCrypto.FromHex("ab01")) == "ab01", "peer: hex round trip");
             var verdict = CleanupEngine.ParseRouterVerdict("Sure: {\"machine\": \"win\", \"window\": 42}");
             Expect(verdict != null && verdict.Machine == "win" && verdict.Window == 42,

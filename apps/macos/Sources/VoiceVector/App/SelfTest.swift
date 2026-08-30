@@ -252,13 +252,17 @@ enum SelfTest {
                                       nonceServer: Data(repeating: 2, count: 32)) == "636241",
                "peer: pairing code test vector")
         if let framed = PeerCrypto.frame(["t": "hello", "name": "mac"]),
-           let parsed = PeerCrypto.parseFrame(framed + Data([9, 9])) {
-            expect(parsed.object["t"] as? String == "hello" && parsed.consumed == framed.count,
+           case .frame(let object, let consumed) = PeerCrypto.parseFrame(framed + Data([9, 9])) {
+            expect(object["t"] as? String == "hello" && consumed == framed.count,
                    "peer: frame round trip leaves trailing bytes")
         } else {
             expect(false, "peer: frame round trip")
         }
-        expect(PeerCrypto.parseFrame(Data([0, 0])) == nil, "peer: incomplete frame is nil")
+        if case .incomplete = PeerCrypto.parseFrame(Data([0, 0])) { expect(true, "peer: incomplete frame") }
+        else { expect(false, "peer: incomplete frame") }
+        // An oversized length must be rejected (invalid), not treated as "need more".
+        if case .invalid = PeerCrypto.parseFrame(Data([0xFF, 0xFF, 0xFF, 0xFF])) { expect(true, "peer: oversized frame rejected") }
+        else { expect(false, "peer: oversized frame rejected") }
         expect(Data(hexString: Data([0xAB, 0x01]).hexString) == Data([0xAB, 0x01]), "peer: hex round trip")
         let keyAttributes: [String: Any] = [kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
                                             kSecAttrKeySizeInBits as String: 256]
