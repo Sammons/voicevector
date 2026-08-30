@@ -1,5 +1,6 @@
 import Foundation
 import AVFoundation
+import CoreAudio
 
 /// Microphone capture: AVAudioEngine input tap → AVAudioConverter → 16 kHz mono
 /// 16-bit WAV on disk. Publishes a smoothed input level for the HUD waveform.
@@ -62,6 +63,13 @@ final class Recorder {
             if alwaysWarm {
                 idleStop?.cancel(); idleStop = nil
                 if !engine.isRunning {
+                    // With no input device the graph is empty and start()
+                    // raises an ObjC exception (uncatchable) — skip instead.
+                    guard Self.hasDefaultInputDevice,
+                          engine.inputNode.inputFormat(forBus: 0).sampleRate > 0 else {
+                        Log.error("Mic warm-up skipped: no audio input device available.")
+                        return
+                    }
                     engine.prepare()
                     do { try engine.start() } catch { Log.error("Mic warm-up failed: \(error.localizedDescription)") }
                 }
@@ -103,9 +111,25 @@ final class Recorder {
         }
     }
 
+    /// CoreAudio's default input device, if any (unplugging the only
+    /// interface leaves none).
+    static var hasDefaultInputDevice: Bool {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultInputDevice,
+                                                 mScope: kAudioObjectPropertyScopeGlobal,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        var device = AudioDeviceID(kAudioObjectUnknown)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let status = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &device)
+        return status == noErr && device != kAudioObjectUnknown
+    }
+
     private func startOnQueue(to url: URL) throws {
         guard writer == nil else { return }
 
+        guard Self.hasDefaultInputDevice else {
+            throw NSError(domain: "VoiceVector", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "No audio input device available."])
+        }
         let input = engine.inputNode
         let inputFormat = input.inputFormat(forBus: 0)
         guard inputFormat.sampleRate > 0 else {
