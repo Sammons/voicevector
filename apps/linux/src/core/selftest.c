@@ -322,6 +322,10 @@ static void test_cleanup(void) {
     expect(streq(wrapped, "<transcript>\nx\n</transcript>"), "cleanup: transcript wrapping"); g_free(wrapped);
     char *rm = vv_review_message("Hi", "shorter");
     expect(streq(rm, "<draft>\nHi\n</draft>\n<instruction>\nshorter\n</instruction>"), "review: message wraps draft and instruction"); g_free(rm);
+    char *cap = vv_screenshot_caption(1, 2, true, true, true);
+    expect(streq(cap, "Display 1 of 2 — ACTIVE: the dictated text will be inserted here; the target window is outlined in red."), "screenshot: active caption"); g_free(cap);
+    cap = vv_screenshot_caption(2, 2, true, false, false);
+    expect(streq(cap, "Display 2 of 2."), "screenshot: plain caption"); g_free(cap);
     pp = vv_post_process("<draft>\nHello\n</draft>", "x");
     expect(streq(pp, "Hello"), "review: echoed draft delimiters stripped"); g_free(pp);
 

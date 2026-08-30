@@ -201,6 +201,10 @@ enum SelfTest {
         expect(CleanupEngine.reviewMessage(draft: "Hi", instruction: "shorter")
                == "<draft>\nHi\n</draft>\n<instruction>\nshorter\n</instruction>",
                "review: message wraps draft and instruction")
+        expect(ScreenshotAttachment.caption(index: 1, total: 2, active: true, outlined: true)
+               == "Display 1 of 2 — ACTIVE: the dictated text will be inserted here; the target window is outlined in red."
+               && ScreenshotAttachment.caption(index: 2, total: 2, active: false, outlined: false) == "Display 2 of 2.",
+               "screenshot: per-display captions")
         expect(CleanupEngine.sanitize("<draft>\nHello\n</draft>", fallback: "x") == "Hello",
                "review: echoed draft delimiters stripped")
         var reviewProfile = DictationProfile(name: "Email", hotkey: .default, cleanupMode: .rich)

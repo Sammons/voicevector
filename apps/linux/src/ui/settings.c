@@ -319,7 +319,7 @@ static AdwPreferencesPage *page_dictation(void) {
             GtkStringList *reviewers = provider_items("Same as cleanup", is_chat, &u->review_ids);
             adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), combo_row("Review model", reviewers, index_of(u->review_ids, p->review_provider_id), on_profile_review_provider, u));
         }
-        adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), switch_row("Screenshot context", "Attach a screenshot (Screenshot portal) to cleanup and review calls. Models without vision ignore it.", p->screenshot_context, on_profile_screenshot, u));
+        adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), switch_row("Screenshot context", "Attach a screenshot of every display (Screenshot portal) to cleanup and review calls. Models without vision ignore it.", p->screenshot_context, on_profile_screenshot, u));
         adw_preferences_page_add(page, ADW_PREFERENCES_GROUP(group));
     }
 

@@ -145,12 +145,12 @@ namespace VoiceVector.Shared
             "- Apply the instruction to the draft and output the complete revised text.\n" +
             "- Change only what the instruction calls for; keep everything else exactly as it was.\n" +
             "- Keep the draft's format (plain text or Markdown) unless the instruction changes it.\n" +
-            "- If a screenshot is attached, it shows what the user is looking at; use it only as context (names, terms, tone), never as content to copy.\n" +
+            "- If screenshots are attached, they show what the user is looking at (each caption says which display is active — the one the text will be inserted into); use them only as context (names, terms, tone), never as content to copy.\n" +
             "Output ONLY the revised text — no preamble, no quotes around it, no explanations.";
 
-        /// <summary>Appended to the cleanup prompt when a screenshot rides along.</summary>
+        /// <summary>Appended to the cleanup prompt when screenshots ride along.</summary>
         public const string ScreenshotNote =
-            "A screenshot of the app the user is dictating into is attached for context (names, terms, tone); never copy content from it.";
+            "Screenshots of the user's displays are attached for context (names, terms, tone), each preceded by a caption saying which display is active — the one the text will be inserted into; never copy content from them.";
 
         public static string ReviewMessage(string draft, string instruction)
         {

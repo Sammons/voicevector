@@ -15,5 +15,6 @@ char *vv_secret_get(const char *provider_id);              /* NULL when absent *
 bool vv_secret_set(const char *provider_id, const char *api_key);
 void vv_secret_delete(const char *provider_id);
 
-/* Screenshot of the current screen via the Screenshot portal, as JPEG (≤1280 px). */
-GBytes *vv_screenshot_jpeg(void);
+/* One JPEG (≤1280 px) per display, cropped from the Screenshot portal's
+ * desktop capture; GPtrArray of VvScreenshot (free func set), NULL on failure. */
+GPtrArray *vv_screenshots(void);

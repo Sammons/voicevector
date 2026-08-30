@@ -22,7 +22,30 @@ const char *vv_review_prompt(void) {
 }
 
 const char *vv_screenshot_note(void) {
-    return "A screenshot of the app the user is dictating into is attached for context (names, terms, tone); never copy content from it.";
+    return "Screenshots of the user's displays are attached for context (names, terms, tone), each preceded by a caption saying which display is active — the one the text will be inserted into; never copy content from them.";
+}
+
+VvScreenshot *vv_screenshot_new(GBytes *jpeg, char *caption_take) {
+    VvScreenshot *s = g_new0(VvScreenshot, 1);
+    s->jpeg = g_bytes_ref(jpeg); s->caption = caption_take;
+    return s;
+}
+
+void vv_screenshot_free(VvScreenshot *s) {
+    if (!s) return;
+    g_bytes_unref(s->jpeg); g_free(s->caption); g_free(s);
+}
+
+char *vv_screenshot_caption(int index, int total, bool active_known, bool active, bool outlined) {
+    GString *t = g_string_new(NULL);
+    g_string_append_printf(t, "Display %d of %d", index, total);
+    if (!active_known) g_string_append(t, " (which display is active is not known on this desktop)");
+    else if (active) {
+        g_string_append(t, " — ACTIVE: the dictated text will be inserted here");
+        if (outlined) g_string_append(t, "; the target window is outlined in red");
+    }
+    g_string_append_c(t, '.');
+    return g_string_free(t, FALSE);
 }
 
 GPtrArray *vv_parse_vocabulary(const char *raw) {

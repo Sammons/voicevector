@@ -4,6 +4,15 @@ All notable changes to VoiceVector. Each release's entry doubles as its
 GitHub release notes. Versions follow [semantic versioning](https://semver.org);
 all three apps share one version number.
 
+## Unreleased
+
+- **Screenshot context covers every display.** One image per display is
+  attached (not just the frontmost window), each preceded by a caption saying
+  which display is active — the one the text will be inserted into — and on
+  macOS and Windows that window is outlined in red in its screenshot. Linux
+  crops the portal's desktop capture per monitor; Wayland hides the focused
+  window, so with several displays the caption says the active one is unknown.
+
 ## v0.4.0 — 2026-08-30
 
 - **Linux app** (`apps/linux/`, Ubuntu 26.04 / GNOME 50 reference; Wayland

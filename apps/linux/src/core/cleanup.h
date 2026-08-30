@@ -9,6 +9,13 @@ const char *vv_cleanup_default_prompt(VvCleanupMode mode);
 const char *vv_review_prompt(void);
 const char *vv_screenshot_note(void);
 
+/* One display's capture plus the caption sent as a text part before it. */
+typedef struct { GBytes *jpeg; char *caption; } VvScreenshot;
+VvScreenshot *vv_screenshot_new(GBytes *jpeg, char *caption_take);
+void vv_screenshot_free(VvScreenshot *s);
+/* "Display i of n — ACTIVE: …" ; active_known=false ⇒ says the active display is unknown. */
+char *vv_screenshot_caption(int index, int total, bool active_known, bool active, bool outlined);
+
 GPtrArray *vv_parse_vocabulary(const char *raw);                 /* char* */
 char *vv_merge_vocabulary(const char *global, const char *extra);
 /* Custom prompt if set, else the built-in for the mode (no vocabulary). */

@@ -82,7 +82,14 @@ after the same sanitizing as cleanup (code fences and echoed delimiters
 stripped; empty ⇒ unchanged). The review model defaults to the cleanup
 provider and can be any chat-capable provider.
 
-**Screenshot context** attaches a JPEG of the frontmost window as an OpenAI
-`image_url` content part (`detail: low`) to the cleanup call and every
-revision, with a one-line note appended to the system prompt. If the model
-rejects image input the call is retried text-only.
+**Screenshot context** attaches one JPEG per display (≤1280 px wide) to the
+cleanup call and every revision, with a one-line note appended to the system
+prompt. The user content becomes an array of parts: the text, then for each
+display a `text` caption followed by an `image_url` part (`detail: low`). The
+display holding the frontmost window comes first and its caption reads
+`Display 1 of N — ACTIVE: the dictated text will be inserted here; the target
+window is outlined in red.` (a red outline is drawn around that window in the
+image); the others are `Display i of N.` On Linux under Wayland the focused
+window is not knowable, so with several displays the caption says the active
+one is unknown. If the model rejects image input the call is retried
+text-only.

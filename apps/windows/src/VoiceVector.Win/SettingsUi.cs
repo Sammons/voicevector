@@ -456,8 +456,8 @@ namespace VoiceVector.Win
             reviewHint.TextWrapping = TextWrapping.Wrap;
             reviewHint.Margin = new Thickness(22, 2, 0, 0);
             var screenshotHint = Theme.Text(
-                "A screenshot of the foreground window is attached to cleanup and review calls so the "
-                + "model knows what you're looking at. Models without vision ignore it.",
+                "A screenshot of every display is attached to cleanup and review calls so the model "
+                + "knows what you're looking at; the window receiving the text is outlined. Models without vision ignore it.",
                 11.5, secondary: true);
             screenshotHint.TextWrapping = TextWrapping.Wrap;
             screenshotHint.Margin = new Thickness(22, 2, 0, 0);

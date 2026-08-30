@@ -42,15 +42,15 @@ enum CleanupEngine {
     }
 
     static func cleanup(raw: String, config: CleanupConfig, profile: ProviderProfile,
-                        image: Data? = nil) async throws -> String {
+                        images: [ScreenshotAttachment] = []) async throws -> String {
         var system = systemPrompt(config: config)
-        if image != nil { system += "\n" + screenshotNote }
+        if !images.isEmpty { system += "\n" + screenshotNote }
         let client = ProviderClient(profile: profile)
         let user = "<transcript>\n\(raw)\n</transcript>"
         let reply: String
-        if let image {
+        if !images.isEmpty {
             // Models without vision reject image parts; fall back to text-only.
-            do { reply = try await client.chat(system: system, user: user, image: image) }
+            do { reply = try await client.chat(system: system, user: user, images: images) }
             catch { reply = try await client.chat(system: systemPrompt(config: config), user: user) }
         } else {
             reply = try await client.chat(system: system, user: user)
@@ -67,13 +67,13 @@ enum CleanupEngine {
     - Apply the instruction to the draft and output the complete revised text.
     - Change only what the instruction calls for; keep everything else exactly as it was.
     - Keep the draft's format (plain text or Markdown) unless the instruction changes it.
-    - If a screenshot is attached, it shows what the user is looking at; use it only as context (names, terms, tone), never as content to copy.
+    - If screenshots are attached, they show what the user is looking at (each caption says which display is active — the one the text will be inserted into); use them only as context (names, terms, tone), never as content to copy.
     Output ONLY the revised text — no preamble, no quotes around it, no explanations.
     """
 
-    /// Appended to the cleanup prompt when a screenshot rides along.
+    /// Appended to the cleanup prompt when screenshots ride along.
     static let screenshotNote =
-        "A screenshot of the app the user is dictating into is attached for context (names, terms, tone); never copy content from it."
+        "Screenshots of the user's displays are attached for context (names, terms, tone), each preceded by a caption saying which display is active — the one the text will be inserted into; never copy content from them."
 
     static func reviewMessage(draft: String, instruction: String) -> String {
         "<draft>\n\(draft)\n</draft>\n<instruction>\n\(instruction)\n</instruction>"
@@ -82,7 +82,7 @@ enum CleanupEngine {
     /// Applies a spoken instruction to the draft; returns the revised draft
     /// (the original if the model returns nothing usable).
     static func revise(draft: String, instruction: String, vocabulary: String,
-                       profile: ProviderProfile, image: Data?) async throws -> String {
+                       profile: ProviderProfile, images: [ScreenshotAttachment]) async throws -> String {
         var system = reviewPrompt
         let terms = parseVocabulary(vocabulary)
         if !terms.isEmpty {
@@ -91,8 +91,8 @@ enum CleanupEngine {
         let client = ProviderClient(profile: profile)
         let user = reviewMessage(draft: draft, instruction: instruction)
         let reply: String
-        if let image {
-            do { reply = try await client.chat(system: system, user: user, image: image) }
+        if !images.isEmpty {
+            do { reply = try await client.chat(system: system, user: user, images: images) }
             catch { reply = try await client.chat(system: system, user: user) }
         } else {
             reply = try await client.chat(system: system, user: user)

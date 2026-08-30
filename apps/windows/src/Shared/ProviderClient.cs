@@ -8,6 +8,25 @@ using System.Threading.Tasks;
 
 namespace VoiceVector.Shared
 {
+    /// <summary>One display's capture plus the caption sent as a text part
+    /// before it (mirrors macOS ScreenshotAttachment).</summary>
+    public sealed class ScreenshotAttachment
+    {
+        public byte[] Jpeg;
+        public string Caption;
+
+        public static string CaptionFor(int index, int total, bool active, bool outlined)
+        {
+            var text = "Display " + index + " of " + total;
+            if (active)
+            {
+                text += " — ACTIVE: the dictated text will be inserted here";
+                if (outlined) text += "; the target window is outlined in red";
+            }
+            return text + ".";
+        }
+    }
+
     public class TranscriptionResult
     {
         public string Text;
@@ -158,20 +177,23 @@ namespace VoiceVector.Shared
             return ChatAsync(system, user, null, temperature);
         }
 
-        /// <summary>`image` (JPEG) rides along as an OpenAI image_url content
-        /// part; models without vision reject it, so callers retry without.</summary>
-        public async Task<string> ChatAsync(string system, string user, byte[] image, double temperature = 0.2)
+        /// <summary>`images` (one per display) ride along after the text, each
+        /// as a caption text part followed by an OpenAI image_url part; models
+        /// without vision reject them, so callers retry without.</summary>
+        public async Task<string> ChatAsync(string system, string user, IList<ScreenshotAttachment> images, double temperature = 0.2)
         {
             if (!_profile.Kind.SupportsChat())
                 throw new InvalidOperationException(_profile.Kind.DisplayName() + " has no chat endpoint");
             object userContent = user;
-            if (image != null)
+            if (images != null && images.Count > 0)
             {
-                userContent = new List<object>
+                var parts = new List<object> { new Dictionary<string, object> { { "type", "text" }, { "text", user } } };
+                foreach (var shot in images)
                 {
-                    new Dictionary<string, object> { { "type", "text" }, { "text", user } },
-                    ImagePart(image),
-                };
+                    parts.Add(new Dictionary<string, object> { { "type", "text" }, { "text", shot.Caption } });
+                    parts.Add(ImagePart(shot.Jpeg));
+                }
+                userContent = parts;
             }
             var payload = new Dictionary<string, object>
             {

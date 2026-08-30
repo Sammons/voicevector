@@ -30,7 +30,7 @@ final class DictationController: ObservableObject {
         var config: AppConfig
         var profile: DictationProfile?
         var policy: CleanupEngine.EffectiveCleanup
-        var screenshot: Data?
+        var screenshots: [ScreenshotAttachment] = []
         var revisions = 0
     }
 
@@ -40,8 +40,8 @@ final class DictationController: ObservableObject {
     @Published private(set) var reviewDraft: String?
     private var review: ReviewSession?
     private var commandSlot: URL?
-    /// Screenshot taken when the hotkey fired, for cleanup/review context.
-    private var pendingScreenshot: Data?
+    /// Screenshots (one per display) taken when the hotkey fired, for cleanup/review context.
+    private var pendingScreenshots: [ScreenshotAttachment] = []
     /// Bumped whenever an entry is added/updated so list views reload.
     @Published private(set) var libraryGeneration = 0
     /// Mic level passthrough for the HUD.
@@ -107,11 +107,11 @@ final class DictationController: ObservableObject {
         let slot = library.newEntrySlot(folder: folder)
         currentSlot = (slot.id, slot.audioURL, folder)
 
-        // Screenshot of what the user is looking at, before anything moves.
-        pendingScreenshot = nil
+        // Screenshots of what the user is looking at, before anything moves.
+        pendingScreenshots = []
         if let profile = configStore.config.dictationProfiles.first(where: { $0.id == activeProfileID }),
            profile.screenshotContext {
-            pendingScreenshot = ScreenCapture.frontmostWindowJPEG()
+            pendingScreenshots = ScreenCapture.allScreens()
         }
 
         // Arm silence-gap streaming: completed phrases transcribe in the
@@ -205,7 +205,7 @@ final class DictationController: ObservableObject {
                              config: AppConfig, profile: DictationProfile?,
                              policy: CleanupEngine.EffectiveCleanup) {
         review = ReviewSession(entry: entry, slot: slot, config: config, profile: profile,
-                               policy: policy, screenshot: pendingScreenshot)
+                               policy: policy, screenshots: pendingScreenshots)
         reviewDraft = entry.cleaned
         state = .reviewing
     }
@@ -274,7 +274,7 @@ final class DictationController: ObservableObject {
             state = .processing("Revising…")
             let revised = try await CleanupEngine.revise(draft: draft, instruction: instruction,
                                                          vocabulary: session.policy.config.vocabulary,
-                                                         profile: reviewer, image: session.screenshot)
+                                                         profile: reviewer, images: session.screenshots)
             reviewDraft = revised
             review?.revisions += 1
             review?.entry.cleanupLabel = session.entry.cleanupLabel
@@ -417,7 +417,7 @@ final class DictationController: ObservableObject {
                 do {
                     entry.cleaned = try await CleanupEngine.cleanup(raw: entry.raw, config: policy.config,
                                                                     profile: cleanupProfile,
-                                                                    image: pendingScreenshot)
+                                                                    images: pendingScreenshots)
                 } catch {
                     entry.cleanupLabel += " (failed — raw used)"
                     Log.error("Cleanup failed, using raw transcript: \(error.localizedDescription)")

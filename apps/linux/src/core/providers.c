@@ -212,6 +212,13 @@ bool vv_provider_transcribe(const VvProvider *p, const char *api_key, GBytes *wa
 
 /* ----------------------------------------------------------- chat */
 
+static VvJson *text_part(const char *text) {
+    VvJson *part = vv_json_object();
+    vv_json_object_set(part, "type", vv_json_string("text"));
+    vv_json_object_set(part, "text", vv_json_string(text));
+    return part;
+}
+
 static VvJson *image_part(GBytes *jpeg) {
     gsize n; const guchar *data = g_bytes_get_data(jpeg, &n);
     char *b64 = g_base64_encode(data, n);
@@ -224,6 +231,14 @@ static VvJson *image_part(GBytes *jpeg) {
     vv_json_object_set(part, "image_url", iu);
     g_free(url); g_free(b64);
     return part;
+}
+
+static void add_screenshots(VvJson *parts, GPtrArray *screenshots) {
+    for (guint i = 0; screenshots && i < screenshots->len; i++) {
+        VvScreenshot *s = g_ptr_array_index(screenshots, i);
+        vv_json_array_add(parts, text_part(s->caption));
+        vv_json_array_add(parts, image_part(s->jpeg));
+    }
 }
 
 static bool chat_payload(const VvProvider *p, const char *key, VvJson *messages, char **reply_out, char **error) {
@@ -261,17 +276,14 @@ static VvJson *message(const char *role, VvJson *content) {
 }
 
 bool vv_provider_chat(const VvProvider *p, const char *api_key, const char *system, const char *user,
-                      GBytes *jpeg, char **reply_out, char **error) {
+                      GPtrArray *screenshots, char **reply_out, char **error) {
     *reply_out = NULL; *error = NULL;
     VvJson *messages = vv_json_array();
     vv_json_array_add(messages, message("system", vv_json_string(system)));
-    if (jpeg) {
+    if (screenshots && screenshots->len) {
         VvJson *parts = vv_json_array();
-        VvJson *text = vv_json_object();
-        vv_json_object_set(text, "type", vv_json_string("text"));
-        vv_json_object_set(text, "text", vv_json_string(user));
-        vv_json_array_add(parts, text);
-        vv_json_array_add(parts, image_part(jpeg));
+        vv_json_array_add(parts, text_part(user));
+        add_screenshots(parts, screenshots);
         vv_json_array_add(messages, message("user", parts));
     } else {
         vv_json_array_add(messages, message("user", vv_json_string(user)));
@@ -280,7 +292,7 @@ bool vv_provider_chat(const VvProvider *p, const char *api_key, const char *syst
 }
 
 bool vv_provider_chat_with_audio(const VvProvider *p, const char *api_key, const char *system, GBytes *wav,
-                                 GBytes *jpeg, char **reply_out, char **error) {
+                                 GPtrArray *screenshots, char **reply_out, char **error) {
     *reply_out = NULL; *error = NULL;
     gsize n; const guchar *data = g_bytes_get_data(wav, &n);
     char *b64 = g_base64_encode(data, n);
@@ -292,7 +304,7 @@ bool vv_provider_chat_with_audio(const VvProvider *p, const char *api_key, const
     vv_json_object_set(ia, "format", vv_json_string("wav"));
     vv_json_object_set(audio, "input_audio", ia);
     vv_json_array_add(parts, audio);
-    if (jpeg) vv_json_array_add(parts, image_part(jpeg));
+    add_screenshots(parts, screenshots);
     g_free(b64);
     VvJson *messages = vv_json_array();
     vv_json_array_add(messages, message("system", vv_json_string(system)));

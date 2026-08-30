@@ -1,5 +1,6 @@
 #include "platform/services.h"
 #include "core/log.h"
+#include "core/cleanup.h"
 #include <glib/gstdio.h>
 #include <gio/gio.h>
 #include <gtk/gtk.h>
@@ -188,7 +189,17 @@ void vv_secret_delete(const char *provider_id) {
 
 /* ---------------------------------------------------- screenshot */
 
-GBytes *vv_screenshot_jpeg(void) {
+static GBytes *pixbuf_jpeg(GdkPixbuf *pix) {
+    int w = gdk_pixbuf_get_width(pix), h = gdk_pixbuf_get_height(pix);
+    GdkPixbuf *scaled = w > 1280 ? gdk_pixbuf_scale_simple(pix, 1280, MAX(1, h * 1280 / w), GDK_INTERP_BILINEAR) : g_object_ref(pix);
+    gchar *buf = NULL; gsize n = 0;
+    GBytes *jpeg = NULL;
+    if (scaled && gdk_pixbuf_save_to_buffer(scaled, &buf, &n, "jpeg", NULL, "quality", "60", NULL)) jpeg = g_bytes_new_take(buf, n);
+    if (scaled) g_object_unref(scaled);
+    return jpeg;
+}
+
+GPtrArray *vv_screenshots(void) {
     if (!bus) bus = g_bus_get_sync(G_BUS_TYPE_SESSION, NULL, NULL);
     if (!bus) return NULL;
     GVariantBuilder ob; g_variant_builder_init(&ob, G_VARIANT_TYPE_VARDICT);
@@ -198,21 +209,61 @@ GBytes *vv_screenshot_jpeg(void) {
     if (!r) { vv_log_error("Screenshot portal: %s", error); g_free(error); return NULL; }
     const char *uri = NULL;
     g_variant_lookup(r, "uri", "&s", &uri);
-    GBytes *jpeg = NULL;
+    GPtrArray *shots = NULL;
     if (uri) {
         GFile *file = g_file_new_for_uri(uri);
         char *path = g_file_get_path(file);
         GdkPixbuf *pix = path ? gdk_pixbuf_new_from_file(path, NULL) : NULL;
         if (pix) {
-            int w = gdk_pixbuf_get_width(pix), h = gdk_pixbuf_get_height(pix);
-            if (w > 1280) { GdkPixbuf *s = gdk_pixbuf_scale_simple(pix, 1280, h * 1280 / w, GDK_INTERP_BILINEAR); g_object_unref(pix); pix = s; }
-            gchar *buf = NULL; gsize n = 0;
-            if (gdk_pixbuf_save_to_buffer(pix, &buf, &n, "jpeg", NULL, "quality", "60", NULL)) jpeg = g_bytes_new_take(buf, n);
+            int pw = gdk_pixbuf_get_width(pix), ph = gdk_pixbuf_get_height(pix);
+            /* The portal returns the whole desktop; crop one image per monitor
+             * using the logical layout (scaled to the capture's pixel size). */
+            GdkDisplay *display = gdk_display_get_default();
+            GListModel *monitors = display ? gdk_display_get_monitors(display) : NULL;
+            guint n = monitors ? g_list_model_get_n_items(monitors) : 0;
+            GdkRectangle *geo = g_new0(GdkRectangle, MAX(n, 1u));
+            int minx = 0, miny = 0, maxx = 0, maxy = 0;
+            for (guint i = 0; i < n; i++) {
+                GdkMonitor *m = g_list_model_get_item(monitors, i);
+                gdk_monitor_get_geometry(m, &geo[i]);
+                g_object_unref(m);
+                if (i == 0) { minx = geo[i].x; miny = geo[i].y; maxx = geo[i].x + geo[i].width; maxy = geo[i].y + geo[i].height; }
+                minx = MIN(minx, geo[i].x); miny = MIN(miny, geo[i].y);
+                maxx = MAX(maxx, geo[i].x + geo[i].width); maxy = MAX(maxy, geo[i].y + geo[i].height);
+            }
+            /* Left-to-right, so "Display 1" is the leftmost. */
+            for (guint i = 1; i < n; i++)
+                for (guint j = i; j > 0 && geo[j].x < geo[j - 1].x; j--) { GdkRectangle t = geo[j]; geo[j] = geo[j - 1]; geo[j - 1] = t; }
+            GPtrArray *jpegs = g_ptr_array_new_with_free_func((GDestroyNotify)g_bytes_unref);
+            if (n >= 2 && maxx > minx && maxy > miny) {
+                double sx = pw / (double)(maxx - minx), sy = ph / (double)(maxy - miny);
+                for (guint i = 0; i < n; i++) {
+                    int x = (int)((geo[i].x - minx) * sx), y = (int)((geo[i].y - miny) * sy);
+                    int w = (int)(geo[i].width * sx), h = (int)(geo[i].height * sy);
+                    if (x < 0 || y < 0 || w < 8 || h < 8 || x + w > pw || y + h > ph) continue;
+                    GdkPixbuf *sub = gdk_pixbuf_new_subpixbuf(pix, x, y, w, h);
+                    GBytes *j = pixbuf_jpeg(sub);
+                    g_object_unref(sub);
+                    if (j) g_ptr_array_add(jpegs, j);
+                }
+            }
+            if (jpegs->len == 0) { GBytes *j = pixbuf_jpeg(pix); if (j) g_ptr_array_add(jpegs, j); }
+            shots = g_ptr_array_new_with_free_func((GDestroyNotify)vv_screenshot_free);
+            for (guint i = 0; i < jpegs->len; i++) {
+                /* Wayland does not tell us which window is focused; with one
+                 * display that is moot, with several the caption says so. */
+                bool known = jpegs->len == 1;
+                g_ptr_array_add(shots, vv_screenshot_new(g_ptr_array_index(jpegs, i),
+                                                         vv_screenshot_caption((int)i + 1, (int)jpegs->len, known, known, false)));
+            }
+            g_ptr_array_unref(jpegs);
+            g_free(geo);
             g_object_unref(pix);
         }
         if (path) { g_unlink(path); g_free(path); }
         g_object_unref(file);
     }
     g_variant_unref(r);
-    return jpeg;
+    if (shots && shots->len == 0) { g_ptr_array_unref(shots); shots = NULL; }
+    return shots;
 }

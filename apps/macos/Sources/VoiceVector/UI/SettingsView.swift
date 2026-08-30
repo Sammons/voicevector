@@ -475,7 +475,7 @@ struct ProfileRow: View {
                 }
                 if profile.screenshotContext {
                     HStack(spacing: 8) {
-                        Text("A screenshot of the frontmost window is attached to cleanup and review calls so the model knows what you're looking at. Needs Screen Recording; models without vision ignore it.")
+                        Text("A screenshot of every display is attached to cleanup and review calls so the model knows what you're looking at; the window receiving the text is outlined. Needs Screen Recording; models without vision ignore it.")
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
                             .fixedSize(horizontal: false, vertical: true)

@@ -28,12 +28,12 @@ namespace VoiceVector.Win.Services
             public AppConfig Config;
             public DictationProfile Profile;
             public CleanupEngine.EffectiveCleanup Policy;
-            public byte[] Screenshot;
+            public IList<ScreenshotAttachment> Screenshots;
             public int Revisions;
         }
         private ReviewSession _review;
         private string _commandPath;
-        private byte[] _pendingScreenshot;
+        private IList<ScreenshotAttachment> _pendingScreenshots;
 
         public StateKind State { get; private set; }
         public string StateDetail { get; private set; }
@@ -107,11 +107,11 @@ namespace VoiceVector.Win.Services
             _slot = slot;
             _slotFolder = folder;
 
-            // Screenshot of what the user is looking at, before anything moves.
-            _pendingScreenshot = null;
+            // Screenshots of what the user is looking at, before anything moves.
+            _pendingScreenshots = null;
             var startProfile = config.DictationProfiles.FirstOrDefault(p => p.Id == _activeProfileId);
             if (startProfile != null && startProfile.ScreenshotContext && FakeAudioPath == null)
-                _pendingScreenshot = ScreenCapture.ForegroundWindowJpeg();
+                _pendingScreenshots = ScreenCapture.AllScreens();
 
             // Arm silence-gap streaming (not with fake audio or single-pass).
             lock (_segmentLock) _segmentTasks.Clear();
@@ -219,7 +219,7 @@ namespace VoiceVector.Win.Services
             _review = new ReviewSession
             {
                 Entry = entry, AudioPath = audioPath, Folder = folder, Config = config,
-                Profile = profile, Policy = policy, Screenshot = _pendingScreenshot,
+                Profile = profile, Policy = policy, Screenshots = _pendingScreenshots,
             };
             ReviewDraft = entry.Cleaned;
             SetState(StateKind.Reviewing, "");
@@ -299,9 +299,9 @@ namespace VoiceVector.Win.Services
                 var system = CleanupEngine.ReviewSystemPrompt(session.Policy.Config.Vocabulary);
                 var user = CleanupEngine.ReviewMessage(draft, instruction);
                 string reply;
-                if (session.Screenshot != null)
+                if (session.Screenshots != null && session.Screenshots.Count > 0)
                 {
-                    try { reply = await client.ChatAsync(system, user, session.Screenshot).ConfigureAwait(false); }
+                    try { reply = await client.ChatAsync(system, user, session.Screenshots).ConfigureAwait(false); }
                     catch { reply = await client.ChatAsync(system, user).ConfigureAwait(false); }
                 }
                 else
@@ -500,12 +500,12 @@ namespace VoiceVector.Win.Services
                             var system = CleanupEngine.SystemPrompt(policy.Config);
                             var user = CleanupEngine.WrapTranscript(entry.Raw);
                             string reply;
-                            if (_pendingScreenshot != null)
+                            if (_pendingScreenshots != null && _pendingScreenshots.Count > 0)
                             {
                                 try
                                 {
                                     reply = await client.ChatAsync(system + "\n" + CleanupEngine.ScreenshotNote,
-                                                                   user, _pendingScreenshot).ConfigureAwait(false);
+                                                                   user, _pendingScreenshots).ConfigureAwait(false);
                                 }
                                 catch { reply = await client.ChatAsync(system, user).ConfigureAwait(false); }
                             }

@@ -22,14 +22,14 @@ typedef struct {
     VvEntry *entry;
     char *audio_path, *folder;
     char *profile_id;
-    GBytes *screenshot;
+    GPtrArray *screenshots;   /* VvScreenshot, or NULL */
     int revisions;
 } Review;
 
 typedef struct {
     char *active_profile_id;
     char *slot_id, *slot_audio, *slot_folder;
-    GBytes *pending_screenshot;
+    GPtrArray *pending_screenshots;
     Review *review;
     char *command_path;
     GPtrArray *segments; GMutex segment_lock;     /* live streamed segments */
@@ -120,7 +120,7 @@ void vv_controller_free(VvController *c) {
     g_ptr_array_unref(p->segments);
     g_bytes_unref(p->chime_start); g_bytes_unref(p->chime_stop); g_bytes_unref(p->chime_error);
     g_free(p->active_profile_id); g_free(p->slot_id); g_free(p->slot_audio); g_free(p->slot_folder); g_free(p->command_path);
-    if (p->pending_screenshot) g_bytes_unref(p->pending_screenshot);
+    if (p->pending_screenshots) g_ptr_array_unref(p->pending_screenshots);
     g_free(p);
     g_free(c->config_path); g_free(c->detail); g_free(c->review_draft);
     g_free(c);
@@ -192,8 +192,8 @@ void vv_controller_start(VvController *c, const char *profile_id) {
     p->active_profile_id = g_strdup(profile_id ? profile_id : first->id);
     VvProfile *profile = vv_config_find_profile(c->config, p->active_profile_id);
 
-    if (p->pending_screenshot) { g_bytes_unref(p->pending_screenshot); p->pending_screenshot = NULL; }
-    if (profile && profile->screenshot_context) p->pending_screenshot = vv_screenshot_jpeg();
+    if (p->pending_screenshots) { g_ptr_array_unref(p->pending_screenshots); p->pending_screenshots = NULL; }
+    if (profile && profile->screenshot_context) p->pending_screenshots = vv_screenshots();
 
     g_free(p->slot_id); g_free(p->slot_audio); g_free(p->slot_folder);
     vv_library_new_slot(c->library, c->config->active_folder, &p->slot_id, &p->slot_audio);
@@ -231,7 +231,7 @@ typedef struct {
     char *fail_message;
     bool review;
     VvProfile *profile;
-    GBytes *screenshot;
+    GPtrArray *screenshots;
     /* results */
     bool stt_ok;
 } Pipeline;
@@ -264,7 +264,7 @@ static gpointer pipeline_thread(gpointer data) {
             GBytes *wav = g_bytes_new_take(data, n);
             char *system = vv_cleanup_system_prompt(&eff.config);
             char *reply = NULL, *error = NULL;
-            if (vv_provider_chat_with_audio(stt, stt_key, system, wav, pl->screenshot, &reply, &error)) {
+            if (vv_provider_chat_with_audio(stt, stt_key, system, wav, pl->screenshots, &reply, &error)) {
                 char *cleaned = vv_post_process(reply, "");
                 if (*cleaned) {
                     g_free(entry->raw); entry->raw = g_strdup(cleaned);
@@ -345,9 +345,9 @@ static gpointer pipeline_thread(gpointer data) {
             char *user = vv_wrap_transcript(entry->raw);
             char *reply = NULL, *error = NULL;
             bool cok;
-            if (pl->screenshot) {
+            if (pl->screenshots) {
                 char *with = g_strconcat(system, "\n", vv_screenshot_note(), NULL);
-                cok = vv_provider_chat(eff.provider, key, with, user, pl->screenshot, &reply, &error);
+                cok = vv_provider_chat(eff.provider, key, with, user, pl->screenshots, &reply, &error);
                 g_free(with);
                 if (!cok) { g_free(error); error = NULL; cok = vv_provider_chat(eff.provider, key, system, user, NULL, &reply, &error); }
             } else cok = vv_provider_chat(eff.provider, key, system, user, NULL, &reply, &error);
@@ -383,7 +383,7 @@ static gboolean pipeline_done(gpointer data) {
         r->entry = pl->entry; pl->entry = NULL;
         r->audio_path = g_strdup(pl->job.audio_path); r->folder = g_strdup(pl->job.folder);
         r->profile_id = g_strdup(pl->profile->id);
-        r->screenshot = pl->screenshot ? g_bytes_ref(pl->screenshot) : NULL;
+        r->screenshots = pl->screenshots ? g_ptr_array_ref(pl->screenshots) : NULL;
         p->review = r;
         g_free(c->review_draft); c->review_draft = g_strdup(r->entry->cleaned);
         set_state(c, VV_STATE_REVIEWING, NULL);
@@ -391,7 +391,7 @@ static gboolean pipeline_done(gpointer data) {
         deliver(c, pl->entry, pl->job.audio_path, pl->job.folder);
     }
     vv_entry_free(pl->entry);
-    if (pl->screenshot) g_bytes_unref(pl->screenshot);
+    if (pl->screenshots) g_ptr_array_unref(pl->screenshots);
     g_free(pl->fail_message); g_free(pl->job.id); g_free(pl->job.audio_path); g_free(pl->job.folder); g_free(pl->job.profile_id);
     g_free(pl);
     return G_SOURCE_REMOVE;
@@ -404,14 +404,14 @@ static gpointer pipeline_runner(gpointer data) {
 }
 
 static void run_pipeline(VvController *c, const char *id, const char *audio_path, const char *folder, double duration,
-                         uint32_t tail_start_byte, const char *profile_id, GBytes *screenshot) {
+                         uint32_t tail_start_byte, const char *profile_id, GPtrArray *screenshots) {
     Pipeline *pl = g_new0(Pipeline, 1);
     pl->c = c; pl->config = c->config;
     pl->job.id = g_strdup(id); pl->job.audio_path = g_strdup(audio_path); pl->job.folder = g_strdup(folder);
     pl->job.duration = duration; pl->job.tail_start_byte = tail_start_byte; pl->job.profile_id = g_strdup(profile_id);
     pl->profile = vv_config_find_profile(c->config, profile_id);
     pl->review = pl->profile && pl->profile->review_before_paste && profile_id != NULL;
-    pl->screenshot = screenshot ? g_bytes_ref(screenshot) : NULL;
+    pl->screenshots = screenshots ? g_ptr_array_ref(screenshots) : NULL;
     pl->entry = vv_entry_new();
     g_free(pl->entry->id); pl->entry->id = g_strdup(id);
     g_free(pl->entry->folder); pl->entry->folder = g_strdup(folder);
@@ -446,7 +446,7 @@ void vv_controller_finish(VvController *c) {
     }
     char *id = p->slot_id, *audio = p->slot_audio, *folder = p->slot_folder;
     p->slot_id = p->slot_audio = p->slot_folder = NULL;
-    run_pipeline(c, id, audio, folder, duration, tail, p->active_profile_id, p->pending_screenshot);
+    run_pipeline(c, id, audio, folder, duration, tail, p->active_profile_id, p->pending_screenshots);
     g_free(id); g_free(audio); g_free(folder);
 }
 
@@ -534,7 +534,7 @@ static gpointer command_thread(gpointer data) {
             char *system = vv_review_system_prompt(eff.config.vocabulary);
             char *user = vv_review_message(t->draft, instruction);
             char *reply = NULL;
-            bool ok = r->screenshot ? vv_provider_chat(reviewer, rkey, system, user, r->screenshot, &reply, &t->error) : false;
+            bool ok = r->screenshots ? vv_provider_chat(reviewer, rkey, system, user, r->screenshots, &reply, &t->error) : false;
             if (!ok) { g_free(t->error); t->error = NULL; ok = vv_provider_chat(reviewer, rkey, system, user, NULL, &reply, &t->error); }
             if (ok) {
                 t->revised = vv_post_process(reply, t->draft);
@@ -586,7 +586,7 @@ static void end_review(VvController *c, bool paste) {
     bump_library(c);
     if (paste) deliver(c, r->entry, r->audio_path, r->folder); else set_state(c, VV_STATE_IDLE, NULL);
     vv_entry_free(r->entry); g_free(r->audio_path); g_free(r->folder); g_free(r->profile_id);
-    if (r->screenshot) g_bytes_unref(r->screenshot);
+    if (r->screenshots) g_ptr_array_unref(r->screenshots);
     g_free(r);
 }
 

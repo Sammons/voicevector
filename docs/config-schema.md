@@ -25,7 +25,7 @@ adding fields must never reset a user's config.
       "vocabulary": "",                 // extra terms, appended to cleanup.vocabulary
       "reviewBeforePaste": false,       // stage the text in the HUD; speak changes; ⏎ pastes, Esc discards
       "reviewProviderID": null,         // model that applies spoken changes; null = cleanup provider
-      "screenshotContext": false        // attach a screenshot of the active window to cleanup + review calls
+      "screenshotContext": false        // attach screenshots of every display to cleanup + review calls
   } ],
   //  Any number of hotkeys, each with its own cleanup policy; always ≥ 1.
   //  The first profile is the "primary" one shown in the wizard/status line.

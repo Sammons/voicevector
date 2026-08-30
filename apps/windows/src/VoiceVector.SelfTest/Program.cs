@@ -314,6 +314,10 @@ namespace VoiceVector.SelfTest
             Expect(CleanupEngine.ReviewMessage("Hi", "shorter")
                    == "<draft>\nHi\n</draft>\n<instruction>\nshorter\n</instruction>",
                    "review: message wraps draft and instruction");
+            Expect(ScreenshotAttachment.CaptionFor(1, 2, true, true)
+                   == "Display 1 of 2 — ACTIVE: the dictated text will be inserted here; the target window is outlined in red."
+                   && ScreenshotAttachment.CaptionFor(2, 2, false, false) == "Display 2 of 2.",
+                   "screenshot: per-display captions");
             Expect(CleanupEngine.PostProcess("<draft>\nHello\n</draft>", "x") == "Hello",
                    "review: echoed draft delimiters stripped");
             var reviewProfile = new DictationProfile

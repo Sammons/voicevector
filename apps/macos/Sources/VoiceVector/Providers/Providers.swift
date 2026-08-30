@@ -120,24 +120,20 @@ struct ProviderClient {
 
     // MARK: Chat (cleanup)
 
-    /// `image` (JPEG) is sent as an OpenAI image_url content part alongside
-    /// the text; models without vision reject it, so callers retry without.
-    func chat(system: String, user: String, image: Data? = nil,
+    /// `images` (one per display) are sent after the text as caption text
+    /// parts each followed by an OpenAI image_url part; models without vision
+    /// reject them, so callers retry without.
+    func chat(system: String, user: String, images: [ScreenshotAttachment] = [],
               temperature: Double = 0.2) async throws -> String {
         guard profile.kind.supportsChat else {
             throw HTTPError.badResponse("\(profile.kind.displayName) has no chat endpoint")
         }
         let url = try HTTP.url(base: profile.baseURL, path: "/chat/completions")
         let userContent: Any
-        if let image {
-            userContent = [
-                ["type": "text", "text": user],
-                ["type": "image_url",
-                 "image_url": ["url": "data:image/jpeg;base64," + image.base64EncodedString(),
-                               "detail": "low"]],
-            ]
-        } else {
+        if images.isEmpty {
             userContent = user
+        } else {
+            userContent = [["type": "text", "text": user]] + images.flatMap(imageParts)
         }
         let payload: [String: Any] = [
             "model": profile.chatModel,
@@ -159,9 +155,16 @@ struct ProviderClient {
         return content
     }
 
+    private func imageParts(_ shot: ScreenshotAttachment) -> [[String: Any]] {
+        [["type": "text", "text": shot.caption],
+         ["type": "image_url",
+          "image_url": ["url": "data:image/jpeg;base64," + shot.jpeg.base64EncodedString(),
+                        "detail": "low"]]]
+    }
+
     /// One-shot audio → text via an audio-capable chat model (OpenAI
     /// `input_audio` content part). Used for single-pass dictation.
-    func chatWithAudio(system: String, audio: Data, image: Data? = nil,
+    func chatWithAudio(system: String, audio: Data, images: [ScreenshotAttachment] = [],
                        temperature: Double = 0.2) async throws -> String {
         guard profile.kind.supportsChat else {
             throw HTTPError.badResponse("\(profile.kind.displayName) has no chat endpoint")
@@ -171,11 +174,7 @@ struct ProviderClient {
             ["type": "input_audio",
              "input_audio": ["data": audio.base64EncodedString(), "format": "wav"]],
         ]
-        if let image {
-            parts.append(["type": "image_url",
-                          "image_url": ["url": "data:image/jpeg;base64," + image.base64EncodedString(),
-                                        "detail": "low"]])
-        }
+        parts += images.flatMap(imageParts)
         let payload: [String: Any] = [
             "model": profile.chatModel,
             "messages": [
