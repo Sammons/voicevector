@@ -4,7 +4,7 @@ All notable changes to VoiceVector. Each release's entry doubles as its
 GitHub release notes. Versions follow [semantic versioning](https://semver.org);
 all three apps share one version number.
 
-## Unreleased
+## v0.4.1 — 2026-08-30
 
 - **Screenshot context covers every display.** One image per display is
   attached (not just the frontmost window), each preceded by a caption saying
