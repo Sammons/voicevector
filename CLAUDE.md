@@ -9,7 +9,8 @@ frontmost app → save as Markdown → optional per-folder webhook.
 | Path | What |
 |---|---|
 | `apps/macos/` | Swift + AppKit/SwiftUI, SwiftPM only (no Xcode). See its `ARCHITECTURE.md`. |
-| `apps/windows/` | C# / .NET 9 + WinUI 3, unpackaged self-contained (no admin). |
+| `apps/windows/` | C# / .NET Framework 4.8 + WPF, single exe (no admin). |
+| `apps/linux/` | C + GTK 4 / libadwaita, system libraries only. `make -C apps/linux` (app), `make -C apps/linux test` (core self-test, GLib + libcurl only). See `docs/linux/README.md`. |
 | `docs/` | Cross-platform contracts (storage format, providers, webhook, config) + per-platform notes in `docs/mac/`, `docs/windows/`. |
 | `shared/prompts/` | Canonical cleanup system prompts. Both apps embed copies; their self-tests assert equality with these files. |
 
@@ -33,7 +34,7 @@ frontmost app → save as Markdown → optional per-folder webhook.
    `VoiceVector.SelfTest`), not XCTest/xunit — Command Line Tools ship no test
    framework and we don't add packages for one.
 2. **The two apps must stay behavior-identical** where they overlap:
-   - `TapStateMachine` (Swift and C#) — same semantics, mirrored self-tests.
+   - `TapStateMachine` (Swift, C#, C) — same semantics, mirrored self-tests.
    - Storage format — byte-compatible Markdown/WAV per
      `docs/storage-format.md`; the C# self-test asserts byte-identical
      rendering vs the macOS output. Change the format ⇒ update both apps,

@@ -2,10 +2,19 @@
 
 All notable changes to VoiceVector. Each release's entry doubles as its
 GitHub release notes. Versions follow [semantic versioning](https://semver.org);
-both the macOS and Windows apps share one version number.
+all three apps share one version number.
 
-## Unreleased
+## v0.4.0 — 2026-08-30
 
+- **Linux app** (`apps/linux/`, Ubuntu 26.04 / GNOME 50 reference; Wayland
+  and X11). C on GTK 4 / libadwaita, dynamically linked against system
+  libraries only — a ~230 KB binary, no runtime to install. Hotkeys through
+  the XDG GlobalShortcuts portal by default (sudo-free, hold-to-talk works),
+  or raw evdev input for modifier-only keys after a one-time `input` group
+  step; paste through the RemoteDesktop portal with a clipboard fallback;
+  API keys in the Secret Service. Same storage format, profiles, review mode,
+  and prompts as the other two apps, checked by a 104-assertion self-test in
+  CI. See `docs/linux/README.md`.
 - **Review before pasting** (per hotkey). The cleaned text is staged in a
   card above the recording pill instead of being pasted. Press the hotkey and
   say a change — "make it shorter", "turn that into a list", "sign it Ben" —
