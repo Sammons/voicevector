@@ -368,6 +368,15 @@ namespace VoiceVector.SelfTest
                 new List<Tuple<string, bool, string>> { Tuple.Create("win", true, "1: A — B") });
             Expect(routerMsg.Contains("<draft>\nhi\n</draft>")
                    && routerMsg.Contains("(current: the user dictated here)"), "router: message shape");
+            var catalog = new Dictionary<string, HashSet<uint>> { { "win", new HashSet<uint> { 1, 2 } } };
+            Expect(CleanupEngine.RouterVerdictValid(new CleanupEngine.RouterVerdict { Machine = "win", Window = 1 }, catalog),
+                   "router: listed window is valid");
+            Expect(CleanupEngine.RouterVerdictValid(new CleanupEngine.RouterVerdict { Machine = "win", Window = 0 }, catalog),
+                   "router: window 0 (focus) is valid");
+            Expect(!CleanupEngine.RouterVerdictValid(new CleanupEngine.RouterVerdict { Machine = "win", Window = 99 }, catalog),
+                   "router: unlisted window id is rejected");
+            Expect(!CleanupEngine.RouterVerdictValid(new CleanupEngine.RouterVerdict { Machine = "ghost", Window = 1 }, catalog),
+                   "router: unknown machine is rejected");
             var mmJson = Json.ParseObject("{\"peers\":[{\"name\":\"x\",\"fingerprint\":\"ab\"}]}");
             var mm = MultiMachineConfig.FromJson(mmJson);
             Expect(!mm.Enabled && mm.Port == 47800 && mm.Peers.Count == 1

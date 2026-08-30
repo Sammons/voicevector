@@ -302,15 +302,31 @@ namespace VoiceVector.Win.Services
             var message = CleanupEngine.RouterMessage(draft,
                 contexts.Select(c => Tuple.Create(c.Machine, c.IsLocal, c.WindowLines)).ToList());
             var images = contexts.SelectMany(c => c.Screens).ToList();
+            var catalog = contexts.ToDictionary(c => c.Machine,
+                c => new HashSet<uint>(c.Windows.Select(w => w.Id)));
             try
             {
                 var client = new ProviderClient(provider, KeyStore.GetApiKey(provider.Id));
-                string reply;
-                try { reply = await client.ChatAsync(CleanupEngine.RouterPrompt, message, images).ConfigureAwait(false); }
-                catch { reply = await client.ChatAsync(CleanupEngine.RouterPrompt, message).ConfigureAwait(false); }
-                var verdict = CleanupEngine.ParseRouterVerdict(reply);
-                // Apply on the UI thread so it can't interleave with AcceptReview;
-                // the session check inside runs there too.
+                string correction = null;
+                CleanupEngine.RouterVerdict valid = null;
+                // The model must pick a machine + window that were offered; an
+                // invalid or hallucinated choice is bounced back with the reason,
+                // up to a few tries, before we give up and paste locally.
+                for (int attempt = 0; attempt < 3; attempt++)
+                {
+                    var user = correction == null ? message : message + "\n\n" + correction;
+                    string reply;
+                    try { reply = await client.ChatAsync(CleanupEngine.RouterPrompt, user, images).ConfigureAwait(false); }
+                    catch { reply = await client.ChatAsync(CleanupEngine.RouterPrompt, user).ConfigureAwait(false); }
+                    if (_review != session) return;
+                    var v = CleanupEngine.ParseRouterVerdict(reply);
+                    if (v != null && CleanupEngine.RouterVerdictValid(v, catalog)) { valid = v; break; }
+                    correction = CleanupEngine.RouterCorrection(reply);
+                }
+                if (valid == null)
+                    Log.Error("Router gave no valid destination after retries; using the local paste.");
+                var verdict = valid;
+                // Apply on the UI thread so it can't interleave with AcceptReview.
                 _dispatcher.Invoke((Action)(() => {
                     if (_review == session) ApplyVerdict(verdict, contexts, machineName, session);
                 }));
@@ -420,7 +436,11 @@ namespace VoiceVector.Win.Services
                 var instruction = (await new ProviderClient(stt, KeyStore.GetApiKey(stt.Id))
                     .TranscribeAsync(audio, "command.wav", vocabulary).ConfigureAwait(false)).Text.Trim();
                 var draft = ReviewDraft;
-                if (instruction.Length == 0 || draft == null) return;
+                if (instruction.Length == 0 || draft == null)
+                {
+                    RaiseNotice("Didn't catch that — press the hotkey and say the change again.");
+                    return;
+                }
                 SetState(StateKind.Processing, "Revising…");
                 var client = new ProviderClient(reviewer, KeyStore.GetApiKey(reviewer.Id));
                 var system = CleanupEngine.ReviewSystemPrompt(session.Policy.Config.Vocabulary);

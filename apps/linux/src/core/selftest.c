@@ -408,6 +408,10 @@ static void test_cleanup(void) {
         expect(strstr(rm2, "<draft>\nhi\n</draft>") && strstr(rm2, "(current: the user dictated here)"),
                "router: message shape");
         g_free(rm2); g_ptr_array_unref(ms);
+        char *corr = vv_router_correction("bogus");
+        expect(strstr(corr, "was not usable") && strstr(corr, "bogus") && strstr(corr, "Do not invent"),
+               "router: correction steers back");
+        g_free(corr);
         VvJson *mmj = vv_json_parse("{\"multiMachine\":{\"peers\":[{\"name\":\"x\",\"fingerprint\":\"ab\"}]}}", NULL);
         VvConfig *mc = vv_config_from_json(mmj);
         expect(!mc->multi_machine.enabled && mc->multi_machine.port == 47800

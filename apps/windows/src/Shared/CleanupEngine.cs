@@ -163,6 +163,27 @@ namespace VoiceVector.Shared
             public uint Window;
         }
 
+        /// <summary>A verdict is valid when it names a listed machine and either
+        /// window 0 ("the current focus") or one of that machine's listed window ids.
+        /// catalog maps machine name → its set of window ids.</summary>
+        public static bool RouterVerdictValid(RouterVerdict verdict,
+            System.Collections.Generic.Dictionary<string, System.Collections.Generic.HashSet<uint>> catalog)
+        {
+            System.Collections.Generic.HashSet<uint> ids;
+            if (verdict == null || !catalog.TryGetValue(verdict.Machine, out ids)) return false;
+            return verdict.Window == 0 || ids.Contains(verdict.Window);
+        }
+
+        /// <summary>Corrective steer appended when the router's last answer was
+        /// unparseable or named a machine/window that was not offered.</summary>
+        public static string RouterCorrection(string reply)
+        {
+            return "Your previous answer was not usable:\n" + reply
+                + "\nAnswer again with ONLY the JSON object {\"machine\": \"<one of the machine names listed above, spelled exactly>\", "
+                + "\"window\": <one of that machine's listed window id numbers, or 0 for the current focus>}. "
+                + "Do not invent a machine name or window id that is not in the lists.";
+        }
+
         /// <summary>Extracts the verdict from a router reply; null when unparseable.</summary>
         public static RouterVerdict ParseRouterVerdict(string reply)
         {

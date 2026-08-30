@@ -279,15 +279,31 @@ final class DictationController: ObservableObject {
         let message = CleanupEngine.routerMessage(
             draft: session.entry.cleaned, machines: contexts.map { ($0.machine, $0.isLocal, $0.windowLines) })
         let images = contexts.flatMap(\.screens)
+        let catalog = contexts.map {
+            CleanupEngine.RouterCatalog(machine: $0.machine, windowIDs: Set($0.windows.map(\.id)))
+        }
         do {
             let client = ProviderClient(profile: provider)
-            let reply: String
-            do { reply = try await client.chat(system: CleanupEngine.routerPrompt, user: message, images: images) }
-            catch { reply = try await client.chat(system: CleanupEngine.routerPrompt, user: message) }
-            guard review?.slot.id == id, let verdict = CleanupEngine.parseRouterVerdict(reply) else {
-                clearRoute(id); return
+            var correction: String?
+            // The model must pick a machine + window that were actually offered;
+            // an invalid or hallucinated choice is bounced back with the reason,
+            // up to a few tries, before we give up and paste locally.
+            for _ in 0..<3 {
+                let user = correction.map { message + "\n\n" + $0 } ?? message
+                let reply: String
+                do { reply = try await client.chat(system: CleanupEngine.routerPrompt, user: user, images: images) }
+                catch { reply = try await client.chat(system: CleanupEngine.routerPrompt, user: user) }
+                guard review?.slot.id == id else { return }
+                guard let verdict = CleanupEngine.parseRouterVerdict(reply),
+                      CleanupEngine.routerVerdictValid(verdict, catalog: catalog) else {
+                    correction = CleanupEngine.routerCorrection(reply)
+                    continue
+                }
+                apply(verdict: verdict, contexts: contexts, sessionID: id, machineName: machineName)
+                return
             }
-            apply(verdict: verdict, contexts: contexts, sessionID: id, machineName: machineName)
+            Log.error("Router gave no valid destination after retries; using the local paste.")
+            clearRoute(id)
         } catch {
             Log.error("Router failed: \(error.localizedDescription)")
             clearRoute(id)
@@ -384,7 +400,12 @@ final class DictationController: ObservableObject {
             let instruction = try await ProviderClient(profile: stt)
                 .transcribe(audioURL: audioURL, vocabulary: vocabulary).text
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !instruction.isEmpty, let draft = reviewDraft else { state = .reviewing; return }
+            guard !instruction.isEmpty, let draft = reviewDraft else {
+                state = .reviewing
+                notify(title: "Didn't catch that", body: "No change was heard — press the hotkey and say it again.")
+                Chime.shared.playError()
+                return
+            }
             state = .processing("Revising…")
             let revised = try await CleanupEngine.revise(draft: draft, instruction: instruction,
                                                          vocabulary: session.policy.config.vocabulary,

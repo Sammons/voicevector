@@ -50,6 +50,14 @@ char *vv_router_message(const char *draft, GPtrArray *machines) {
     return g_string_free(s, FALSE);
 }
 
+char *vv_router_correction(const char *reply) {
+    return g_strdup_printf(
+        "Your previous answer was not usable:\n%s\nAnswer again with ONLY the JSON object "
+        "{\"machine\": \"<one of the machine names listed above, spelled exactly>\", "
+        "\"window\": <one of that machine's listed window id numbers, or 0 for the current focus>}. "
+        "Do not invent a machine name or window id that is not in the lists.", reply ? reply : "");
+}
+
 bool vv_router_parse(const char *reply, char **machine_out, guint32 *window_out) {
     *machine_out = NULL; *window_out = 0;
     if (!reply) return false;

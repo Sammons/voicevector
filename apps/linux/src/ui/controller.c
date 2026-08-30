@@ -525,7 +525,7 @@ static void start_command_recording(VvController *c) {
     if (c->config->play_sounds) vv_audio_play_wav(p->chime_start);
 }
 
-typedef struct { VvController *c; char *path; char *draft; char *revised; char *error; } CommandTask;
+typedef struct { VvController *c; char *path; char *draft; char *revised; char *error; bool empty; } CommandTask;
 
 static gpointer command_thread(gpointer data) {
     CommandTask *t = data;
@@ -547,7 +547,9 @@ static gpointer command_thread(gpointer data) {
         GPtrArray *vocabulary = vv_parse_vocabulary(eff.config.vocabulary);
         char *key = vv_secret_get(eff.stt->id);
         char *instruction = NULL;
-        if (vv_provider_transcribe(eff.stt, key, wav, "command.wav", vocabulary, &instruction, &t->error) && *g_strstrip(instruction)) {
+        bool heard = vv_provider_transcribe(eff.stt, key, wav, "command.wav", vocabulary, &instruction, &t->error);
+        if (heard && !*g_strstrip(instruction)) t->empty = true;
+        if (heard && *instruction) {
             char *rkey = vv_secret_get(reviewer->id);
             char *system = vv_review_system_prompt(eff.config.vocabulary);
             char *user = vv_review_message(t->draft, instruction);
@@ -578,6 +580,7 @@ static gboolean command_done(gpointer data) {
     CommandTask *t = data;
     VvController *c = t->c;
     if (t->revised) { g_free(c->review_draft); c->review_draft = t->revised; t->revised = NULL; }
+    else if (t->empty) { notify(c, "Didn't catch that — press the hotkey and say the change again."); if (c->config->play_sounds) vv_audio_play_wav(P(c)->chime_error); }
     else if (t->error) { char *m = g_strdup_printf("Revision failed: %s", t->error); notify(c, m); g_free(m); if (c->config->play_sounds) vv_audio_play_wav(P(c)->chime_error); }
     set_state(c, VV_STATE_REVIEWING, NULL);
     g_free(t->path); g_free(t->draft); g_free(t->error); g_free(t);
@@ -769,34 +772,59 @@ static gpointer router_thread(gpointer data) {
             g_ptr_array_add(attachments, vv_screenshot_new(shot->jpeg, g_strdup(shot->caption)));
         }
     }
-    char *user = vv_router_message(t->draft, machines);
+    char *base = vv_router_message(t->draft, machines);
     char *key = vv_secret_get(provider->id);
-    char *reply = NULL, *error = NULL;
-    bool ok = vv_provider_chat(provider, key, vv_router_prompt(), user, attachments, &reply, &error);
-    if (!ok) { g_free(error); error = NULL; ok = vv_provider_chat(provider, key, vv_router_prompt(), user, NULL, &reply, &error); }
-    if (ok) {
-        char *machine = NULL; guint32 window = 0;
+    /* The model must pick a machine + window that were offered; an invalid or
+     * hallucinated choice is bounced back with the reason, up to a few tries. */
+    char *machine = NULL; guint32 window = 0; bool valid = false;
+    char *correction = NULL;
+    for (int attempt = 0; attempt < 3 && !valid; attempt++) {
+        char *user = correction ? g_strconcat(base, "\n\n", correction, NULL) : g_strdup(base);
+        char *reply = NULL, *error = NULL;
+        bool ok = vv_provider_chat(provider, key, vv_router_prompt(), user, attachments, &reply, &error);
+        if (!ok) { g_free(error); error = NULL; ok = vv_provider_chat(provider, key, vv_router_prompt(), user, NULL, &reply, &error); }
+        g_free(user);
+        if (!ok) { vv_log_error("Router failed: %s", error ? error : "?"); g_free(error); g_free(reply); break; }
+        g_free(error);
+        g_free(machine); machine = NULL; window = 0;
         if (vv_router_parse(reply, &machine, &window)) {
-            for (guint i = 0; i < contexts->len; i++) {
+            /* Valid = a listed machine, and window 0 or an id present in that
+             * machine's window lines ("id: App — Title"). */
+            for (guint i = 0; i < contexts->len && !valid; i++) {
                 VvMachineContext *ctx = g_ptr_array_index(contexts, i);
-                if (g_strcmp0(ctx->machine, machine) != 0 || ctx->is_local) continue;
-                for (guint k = 0; k < t->peers->len; k++) {
-                    VvPeer *peer = g_ptr_array_index(t->peers, k);
-                    if (g_strcmp0(peer->name, ctx->machine) == 0) {
-                        t->route_peer_fp = g_strdup(peer->fingerprint);
-                        t->route_label = g_strdup(ctx->machine);
-                        t->route_window = window;
-                        t->route_display = g_strdup_printf("→ %s", ctx->machine);
-                        break;
-                    }
+                if (g_strcmp0(ctx->machine, machine) != 0) continue;
+                if (window == 0) { valid = true; break; }
+                char **lines = g_strsplit(ctx->window_lines, "\n", -1);
+                for (int li = 0; lines[li]; li++) {
+                    if ((guint32)g_ascii_strtoull(lines[li], NULL, 10) == window
+                        && strchr(lines[li], ':')) { valid = true; break; }
+                }
+                g_strfreev(lines);
+            }
+        }
+        if (!valid) { g_free(correction); correction = vv_router_correction(reply); }
+        g_free(reply);
+    }
+    g_free(correction);
+    if (valid && machine) {
+        for (guint i = 0; i < contexts->len; i++) {
+            VvMachineContext *ctx = g_ptr_array_index(contexts, i);
+            if (g_strcmp0(ctx->machine, machine) != 0 || ctx->is_local) continue;
+            for (guint k = 0; k < t->peers->len; k++) {
+                VvPeer *peer = g_ptr_array_index(t->peers, k);
+                if (g_strcmp0(peer->name, ctx->machine) == 0) {
+                    t->route_peer_fp = g_strdup(peer->fingerprint);
+                    t->route_label = g_strdup(ctx->machine);
+                    t->route_window = window;
+                    t->route_display = g_strdup_printf("→ %s", ctx->machine);
+                    break;
                 }
             }
         }
-        g_free(machine);
-    } else {
-        vv_log_error("Router failed: %s", error ? error : "?");
+    } else if (!valid) {
+        vv_log_error("Router gave no valid destination after retries; using the local paste.");
     }
-    g_free(error); g_free(reply); g_free(key); g_free(user);
+    g_free(machine); g_free(key); g_free(base);
     g_ptr_array_unref(attachments); g_ptr_array_unref(machines); g_ptr_array_unref(contexts);
     g_idle_add(router_done, t);
     return NULL;

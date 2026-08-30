@@ -86,6 +86,22 @@ enum CleanupEngine {
         var window: UInt32
     }
 
+    /// One machine's routable windows, for validating a verdict.
+    struct RouterCatalog { let machine: String; let windowIDs: Set<UInt32> }
+
+    /// A verdict is valid when it names a listed machine and either window 0
+    /// ("the current focus") or one of that machine's listed window ids.
+    static func routerVerdictValid(_ verdict: RouterVerdict, catalog: [RouterCatalog]) -> Bool {
+        guard let entry = catalog.first(where: { $0.machine == verdict.machine }) else { return false }
+        return verdict.window == 0 || entry.windowIDs.contains(verdict.window)
+    }
+
+    /// Corrective steer appended to the router message when its last answer was
+    /// unparseable or named a machine/window that was not offered.
+    static func routerCorrection(_ reply: String) -> String {
+        "Your previous answer was not usable:\n\(reply)\nAnswer again with ONLY the JSON object {\"machine\": \"<one of the machine names listed above, spelled exactly>\", \"window\": <one of that machine's listed window id numbers, or 0 for the current focus>}. Do not invent a machine name or window id that is not in the lists."
+    }
+
     /// Extracts the verdict from a router reply; nil when unparseable.
     static func parseRouterVerdict(_ reply: String) -> RouterVerdict? {
         guard let start = reply.firstIndex(of: "{"), let end = reply.lastIndex(of: "}"),

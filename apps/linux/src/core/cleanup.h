@@ -40,6 +40,9 @@ void vv_router_machine_free(VvRouterMachine *m);
 char *vv_router_message(const char *draft, GPtrArray *machines /* VvRouterMachine* */);
 /* Extracts {machine, window} from a router reply; false when unparseable. */
 bool vv_router_parse(const char *reply, char **machine_out, guint32 *window_out);
+/* Corrective steer appended when the router's last answer was unparseable or
+ * named a machine/window that was not offered (caller frees). */
+char *vv_router_correction(const char *reply);
 
 GPtrArray *vv_parse_vocabulary(const char *raw);                 /* char* */
 char *vv_merge_vocabulary(const char *global, const char *extra);

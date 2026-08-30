@@ -284,6 +284,15 @@ enum SelfTest {
         let routerMsg = CleanupEngine.routerMessage(draft: "hi", machines: [("mac", true, "1: A — B")])
         expect(routerMsg.contains("<draft>\nhi\n</draft>") && routerMsg.contains("(current: the user dictated here)"),
                "router: message shape")
+        let catalog = [CleanupEngine.RouterCatalog(machine: "mac", windowIDs: [1, 2])]
+        expect(CleanupEngine.routerVerdictValid(.init(machine: "mac", window: 1), catalog: catalog),
+               "router: listed window is valid")
+        expect(CleanupEngine.routerVerdictValid(.init(machine: "mac", window: 0), catalog: catalog),
+               "router: window 0 (focus) is valid")
+        expect(!CleanupEngine.routerVerdictValid(.init(machine: "mac", window: 99), catalog: catalog),
+               "router: unlisted window id is rejected")
+        expect(!CleanupEngine.routerVerdictValid(.init(machine: "ghost", window: 1), catalog: catalog),
+               "router: unknown machine is rejected")
         if let mmData = "{\"peers\":[{\"name\":\"x\",\"fingerprint\":\"ab\"}]}".data(using: .utf8),
            let mm = try? JSONDecoder().decode(MultiMachineConfig.self, from: mmData) {
             expect(mm.enabled == false && mm.port == 47800 && mm.peers.first?.allowDeliver == false
