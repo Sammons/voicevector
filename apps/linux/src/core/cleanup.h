@@ -16,6 +16,21 @@ void vv_screenshot_free(VvScreenshot *s);
 /* "Display i of n — ACTIVE: …" ; active_known=false ⇒ says the active display is unknown. */
 char *vv_screenshot_caption(int index, int total, bool active_known, bool active, bool outlined);
 
+/* The screenshots taken for one dictation: one JPEG per display, the active
+ * display (where the text is inserted) first when known. Persisted beside the
+ * entry as <id>-screen-N.jpg (docs/storage-format.md). Reference counted. */
+typedef struct {
+    GPtrArray *images;     /* GBytes* */
+    int active_index;      /* 0-based, -1 when not knowable */
+    bool outlined;         /* target window outlined in red in the active image */
+    int refs;
+} VvScreenshotSet;
+VvScreenshotSet *vv_screenshot_set_new(void);
+VvScreenshotSet *vv_screenshot_set_ref(VvScreenshotSet *s);
+void vv_screenshot_set_unref(VvScreenshotSet *s);
+/* Captioned attachments for the chat call: GPtrArray of VvScreenshot (free func set). */
+GPtrArray *vv_screenshot_set_attachments(const VvScreenshotSet *s);
+
 GPtrArray *vv_parse_vocabulary(const char *raw);                 /* char* */
 char *vv_merge_vocabulary(const char *global, const char *extra);
 /* Custom prompt if set, else the built-in for the mode (no vocabulary). */

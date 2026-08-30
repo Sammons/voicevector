@@ -28,12 +28,12 @@ namespace VoiceVector.Win.Services
             public AppConfig Config;
             public DictationProfile Profile;
             public CleanupEngine.EffectiveCleanup Policy;
-            public IList<ScreenshotAttachment> Screenshots;
+            public ScreenshotSet Screenshots;
             public int Revisions;
         }
         private ReviewSession _review;
         private string _commandPath;
-        private IList<ScreenshotAttachment> _pendingScreenshots;
+        private ScreenshotSet _pendingScreenshots;
 
         public StateKind State { get; private set; }
         public string StateDetail { get; private set; }
@@ -111,7 +111,10 @@ namespace VoiceVector.Win.Services
             _pendingScreenshots = null;
             var startProfile = config.DictationProfiles.FirstOrDefault(p => p.Id == _activeProfileId);
             if (startProfile != null && startProfile.ScreenshotContext && FakeAudioPath == null)
+            {
                 _pendingScreenshots = ScreenCapture.AllScreens();
+                _library().SaveScreenshots(slot.Key, folder, _pendingScreenshots);
+            }
 
             // Arm silence-gap streaming (not with fake audio or single-pass).
             lock (_segmentLock) _segmentTasks.Clear();
@@ -198,6 +201,11 @@ namespace VoiceVector.Win.Services
         {
             if (State != StateKind.Recording) return;
             Recorder.Discard();
+            if (_slot != null && (_review == null || _commandPath == null))
+            {
+                _library().DeleteScreenshots(_slot.Value.Key, _slotFolder);
+                _pendingScreenshots = null;
+            }
             _slot = null;
             _hook.RecordingActive = false;
             if (_review != null && _commandPath != null)
@@ -299,9 +307,9 @@ namespace VoiceVector.Win.Services
                 var system = CleanupEngine.ReviewSystemPrompt(session.Policy.Config.Vocabulary);
                 var user = CleanupEngine.ReviewMessage(draft, instruction);
                 string reply;
-                if (session.Screenshots != null && session.Screenshots.Count > 0)
+                if (session.Screenshots != null)
                 {
-                    try { reply = await client.ChatAsync(system, user, session.Screenshots).ConfigureAwait(false); }
+                    try { reply = await client.ChatAsync(system, user, session.Screenshots.Attachments()).ConfigureAwait(false); }
                     catch { reply = await client.ChatAsync(system, user).ConfigureAwait(false); }
                 }
                 else
@@ -358,6 +366,8 @@ namespace VoiceVector.Win.Services
             var audioPath = _library().AudioPath(entry);
             if (!File.Exists(audioPath)) return;
             SetState(StateKind.Processing, "Transcribing…");
+            // Reuse the screenshots saved with the entry; the screen has moved on.
+            _pendingScreenshots = _library().LoadScreenshots(entry);
             var _ = ProcessAsync(entry.Id, audioPath, entry.Folder, entry.Duration, 0, Guid.Empty);
         }
 
@@ -370,6 +380,7 @@ namespace VoiceVector.Win.Services
             {
                 Id = id, Folder = folder, Date = DateTimeOffset.Now, Duration = duration,
             };
+            entry.Attach(_pendingScreenshots);
 
             var dictationProfile = config.DictationProfiles.FirstOrDefault(p => p.Id == profileId);
             var policy = CleanupEngine.Effective(dictationProfile, config);
@@ -500,12 +511,12 @@ namespace VoiceVector.Win.Services
                             var system = CleanupEngine.SystemPrompt(policy.Config);
                             var user = CleanupEngine.WrapTranscript(entry.Raw);
                             string reply;
-                            if (_pendingScreenshots != null && _pendingScreenshots.Count > 0)
+                            if (_pendingScreenshots != null)
                             {
                                 try
                                 {
                                     reply = await client.ChatAsync(system + "\n" + CleanupEngine.ScreenshotNote,
-                                                                   user, _pendingScreenshots).ConfigureAwait(false);
+                                                                   user, _pendingScreenshots.Attachments()).ConfigureAwait(false);
                                 }
                                 catch { reply = await client.ChatAsync(system, user).ConfigureAwait(false); }
                             }

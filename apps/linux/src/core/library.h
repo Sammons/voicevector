@@ -4,6 +4,7 @@
 #pragma once
 #include <glib.h>
 #include <stdbool.h>
+#include "core/cleanup.h"
 
 typedef struct {
     char *id;
@@ -15,7 +16,15 @@ typedef struct {
     char *status;
     char *cleaned;
     char *raw;
+    /* Screenshot context saved beside the entry (<id>-screen-N.jpg): count,
+     * 1-based index of the active display (0 = unknown), outline flag. */
+    int screenshots;
+    int active_screenshot;
+    bool screenshot_outline;
 } VvEntry;
+
+/* Records the set's shape in the front matter fields (NULL clears). */
+void vv_entry_attach(VvEntry *e, const VvScreenshotSet *set);
 
 VvEntry *vv_entry_new(void);
 void vv_entry_free(VvEntry *e);
@@ -37,6 +46,11 @@ void vv_library_new_slot(VvLibrary *lib, const char *folder, char **id, char **a
 bool vv_library_save(VvLibrary *lib, const VvEntry *e);
 void vv_library_delete(VvLibrary *lib, const VvEntry *e);
 char *vv_library_audio_path(VvLibrary *lib, const VvEntry *e);
+
+/* Screenshots beside the entry (<id>-screen-N.jpg). */
+void vv_library_save_screenshots(VvLibrary *lib, const char *id, const char *folder, const VvScreenshotSet *set);
+VvScreenshotSet *vv_library_load_screenshots(VvLibrary *lib, const VvEntry *e);   /* NULL when none */
+void vv_library_delete_screenshots(VvLibrary *lib, const char *id, const char *folder);
 
 /* Markdown format (must match apps/macos and apps/windows). */
 char *vv_library_render_date(gint64 unix_seconds);

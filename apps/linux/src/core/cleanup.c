@@ -36,6 +36,30 @@ void vv_screenshot_free(VvScreenshot *s) {
     g_bytes_unref(s->jpeg); g_free(s->caption); g_free(s);
 }
 
+VvScreenshotSet *vv_screenshot_set_new(void) {
+    VvScreenshotSet *s = g_new0(VvScreenshotSet, 1);
+    s->images = g_ptr_array_new_with_free_func((GDestroyNotify)g_bytes_unref);
+    s->active_index = -1; s->refs = 1;
+    return s;
+}
+
+VvScreenshotSet *vv_screenshot_set_ref(VvScreenshotSet *s) { if (s) s->refs++; return s; }
+
+void vv_screenshot_set_unref(VvScreenshotSet *s) {
+    if (!s || --s->refs > 0) return;
+    g_ptr_array_unref(s->images); g_free(s);
+}
+
+GPtrArray *vv_screenshot_set_attachments(const VvScreenshotSet *s) {
+    GPtrArray *out = g_ptr_array_new_with_free_func((GDestroyNotify)vv_screenshot_free);
+    for (guint i = 0; s && i < s->images->len; i++) {
+        bool active = s->active_index == (int)i;
+        g_ptr_array_add(out, vv_screenshot_new(g_ptr_array_index(s->images, i),
+                        vv_screenshot_caption((int)i + 1, (int)s->images->len, s->active_index >= 0, active, active && s->outlined)));
+    }
+    return out;
+}
+
 char *vv_screenshot_caption(int index, int total, bool active_known, bool active, bool outlined) {
     GString *t = g_string_new(NULL);
     g_string_append_printf(t, "Display %d of %d", index, total);

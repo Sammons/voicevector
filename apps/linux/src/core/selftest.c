@@ -110,7 +110,17 @@ static void test_markdown(void) {
     expect(fabs(p->duration - 12.4) < 0.01, "markdown: duration");
     expect(streq(p->stt_label, e->stt_label), "markdown: stt label");
     expect(p->date_unix == e->date_unix, "markdown: date");
-    vv_entry_free(p); g_free(md); vv_entry_free(e);
+    vv_entry_free(p);
+    VvScreenshotSet *ss = vv_screenshot_set_new();
+    g_ptr_array_add(ss->images, g_bytes_new("\1", 1)); g_ptr_array_add(ss->images, g_bytes_new("\2", 1));
+    ss->active_index = 0; ss->outlined = true;
+    vv_entry_attach(e, ss);
+    char *smd = vv_library_render(e);
+    expect(strstr(smd, "status: complete\nscreenshots: 2\nactiveScreenshot: 1\nscreenshotOutline: true\n---\n") != NULL, "markdown: screenshot keys rendered after status");
+    p = vv_library_parse(smd, e->id, e->folder);
+    expect(p->screenshots == 2 && p->active_screenshot == 1 && p->screenshot_outline, "markdown: screenshot keys round trip");
+    vv_entry_free(p); g_free(smd); vv_screenshot_set_unref(ss);
+    g_free(md); vv_entry_free(e);
     VvEntry *bare = vv_library_parse("---\ndate: 2026-08-25T12:00:00Z\nstatus: complete\n---\n\nJust text\n", "x", "Inbox");
     expect(streq(bare->cleaned, "Just text") && streq(bare->raw, "Just text"), "markdown: bare body");
     vv_entry_free(bare);
@@ -145,9 +155,30 @@ static void test_library_files(void) {
     got = vv_library_get_entry(lib, "Inbox", id);
     expect(got && streq(got->cleaned, "updated"), "library: entry updated");
     vv_entry_free(got);
+    VvScreenshotSet *set = vv_screenshot_set_new();
+    g_ptr_array_add(set->images, g_bytes_new("\xff\xd8\1", 3)); g_ptr_array_add(set->images, g_bytes_new("\xff\xd8\2", 3));
+    set->active_index = 1;
+    vv_library_save_screenshots(lib, id, "Inbox", set);
+    vv_entry_attach(e, set);
+    vv_library_save(lib, e);
+    got = vv_library_get_entry(lib, "Inbox", id);
+    VvScreenshotSet *loaded = vv_library_load_screenshots(lib, got);
+    expect(loaded && loaded->images->len == 2 && g_bytes_equal(g_ptr_array_index(loaded->images, 1), g_ptr_array_index(set->images, 1))
+           && loaded->active_index == 1 && !loaded->outlined, "library: screenshots saved beside the entry and reloaded");
+    GPtrArray *att = vv_screenshot_set_attachments(loaded);
+    expect(att->len == 2 && streq(((VvScreenshot *)g_ptr_array_index(att, 0))->caption, "Display 1 of 2.")
+           && streq(((VvScreenshot *)g_ptr_array_index(att, 1))->caption, "Display 2 of 2 — ACTIVE: the dictated text will be inserted here."),
+           "library: reloaded captions");
+    g_ptr_array_unref(att); vv_screenshot_set_unref(loaded); vv_entry_free(got); vv_screenshot_set_unref(set);
+    ids = vv_library_entry_ids(lib, "Inbox");
+    expect(ids->len == 1, "library: screenshot files are not entries");
+    g_ptr_array_unref(ids);
     vv_library_delete(lib, e);
     ids = vv_library_entry_ids(lib, "Inbox");
     expect(ids->len == 0, "library: entry deleted");
+    char *shot1 = g_strdup_printf("%s/Inbox/%s-screen-1.jpg", root, id);
+    expect(!g_file_test(shot1, G_FILE_TEST_EXISTS), "library: screenshots deleted with the entry");
+    g_free(shot1);
     g_ptr_array_unref(ids);
     vv_entry_free(e); g_free(id); g_free(audio); vv_library_free(lib);
     char *rm = g_strdup_printf("rm -rf '%s'", root);

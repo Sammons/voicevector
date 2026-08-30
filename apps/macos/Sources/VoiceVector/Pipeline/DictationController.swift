@@ -30,7 +30,7 @@ final class DictationController: ObservableObject {
         var config: AppConfig
         var profile: DictationProfile?
         var policy: CleanupEngine.EffectiveCleanup
-        var screenshots: [ScreenshotAttachment] = []
+        var screenshots: ScreenshotSet?
         var revisions = 0
     }
 
@@ -40,8 +40,9 @@ final class DictationController: ObservableObject {
     @Published private(set) var reviewDraft: String?
     private var review: ReviewSession?
     private var commandSlot: URL?
-    /// Screenshots (one per display) taken when the hotkey fired, for cleanup/review context.
-    private var pendingScreenshots: [ScreenshotAttachment] = []
+    /// Screenshots (one per display) taken when the hotkey fired, for
+    /// cleanup/review context; saved beside the entry so a retry reuses them.
+    private var pendingScreenshots: ScreenshotSet?
     /// Bumped whenever an entry is added/updated so list views reload.
     @Published private(set) var libraryGeneration = 0
     /// Mic level passthrough for the HUD.
@@ -108,10 +109,11 @@ final class DictationController: ObservableObject {
         currentSlot = (slot.id, slot.audioURL, folder)
 
         // Screenshots of what the user is looking at, before anything moves.
-        pendingScreenshots = []
+        pendingScreenshots = nil
         if let profile = configStore.config.dictationProfiles.first(where: { $0.id == activeProfileID }),
            profile.screenshotContext {
             pendingScreenshots = ScreenCapture.allScreens()
+            library.saveScreenshots(id: slot.id, folder: folder, pendingScreenshots)
         }
 
         // Arm silence-gap streaming: completed phrases transcribe in the
@@ -190,6 +192,10 @@ final class DictationController: ObservableObject {
     func discardRecording() {
         guard state == .recording else { return }
         recorder.discard()
+        if let slot = currentSlot, review == nil || commandSlot == nil {
+            library.deleteScreenshots(id: slot.id, folder: slot.folder)
+            pendingScreenshots = nil
+        }
         currentSlot = nil
         if review != nil, commandSlot != nil {
             commandSlot = nil
@@ -274,7 +280,7 @@ final class DictationController: ObservableObject {
             state = .processing("Revising…")
             let revised = try await CleanupEngine.revise(draft: draft, instruction: instruction,
                                                          vocabulary: session.policy.config.vocabulary,
-                                                         profile: reviewer, images: session.screenshots)
+                                                         profile: reviewer, images: session.screenshots?.attachments ?? [])
             reviewDraft = revised
             review?.revisions += 1
             review?.entry.cleanupLabel = session.entry.cleanupLabel
@@ -317,6 +323,7 @@ final class DictationController: ObservableObject {
                          profileID: UUID? = nil) async {
         var entry = Entry(id: slot.id, folder: slot.folder, date: Date(), duration: duration,
                           sttLabel: "", cleanupLabel: "", status: "complete", cleaned: "", raw: "")
+        entry.attach(pendingScreenshots)
 
         let dictationProfile = config.dictationProfiles.first(where: { $0.id == profileID })
         let policy = CleanupEngine.effective(profile: dictationProfile, config: config)
@@ -417,7 +424,7 @@ final class DictationController: ObservableObject {
                 do {
                     entry.cleaned = try await CleanupEngine.cleanup(raw: entry.raw, config: policy.config,
                                                                     profile: cleanupProfile,
-                                                                    images: pendingScreenshots)
+                                                                    images: pendingScreenshots?.attachments ?? [])
                 } catch {
                     entry.cleanupLabel += " (failed — raw used)"
                     Log.error("Cleanup failed, using raw transcript: \(error.localizedDescription)")
@@ -486,6 +493,8 @@ final class DictationController: ObservableObject {
         guard FileManager.default.fileExists(atPath: audioURL.path) else { return }
         state = .processing("Transcribing…")
         let config = configStore.config
+        // Reuse the screenshots saved with the entry; the screen has moved on.
+        pendingScreenshots = library.loadScreenshots(entry)
         Task {
             await self.process(slot: (entry.id, audioURL, entry.folder),
                                duration: entry.duration, config: config)

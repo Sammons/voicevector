@@ -36,9 +36,9 @@ namespace VoiceVector.Win.Services
         [DllImport("user32.dll")] private static extern IntPtr MonitorFromWindow(IntPtr hWnd, uint flags);
         private const uint MONITOR_DEFAULTTONEAREST = 2;
 
-        public static IList<ScreenshotAttachment> AllScreens(int maxWidth = 1280)
+        public static ScreenshotSet AllScreens(int maxWidth = 1280)
         {
-            var result = new List<ScreenshotAttachment>();
+            var set = new ScreenshotSet();
             try
             {
                 var target = IntPtr.Zero;
@@ -68,7 +68,6 @@ namespace VoiceVector.Win.Services
                     return a.Value.Left.CompareTo(b.Value.Left);
                 });
 
-                var shots = new List<KeyValuePair<byte[], bool[]>>();
                 foreach (var monitor in monitors)
                 {
                     var bounds = monitor.Value;
@@ -78,20 +77,16 @@ namespace VoiceVector.Win.Services
                         highlight = new Rectangle(targetRect.Left - bounds.Left, targetRect.Top - bounds.Top,
                                                   targetRect.Right - targetRect.Left, targetRect.Bottom - targetRect.Top);
                     var jpeg = CaptureMonitor(bounds, highlight, maxWidth);
-                    if (jpeg != null) shots.Add(new KeyValuePair<byte[], bool[]>(jpeg, new[] { active, highlight != null }));
+                    if (jpeg == null) continue;
+                    if (active) { set.ActiveIndex = set.Images.Count; set.Outlined = highlight.HasValue; }
+                    set.Images.Add(jpeg);
                 }
-                for (int i = 0; i < shots.Count; i++)
-                    result.Add(new ScreenshotAttachment
-                    {
-                        Jpeg = shots[i].Key,
-                        Caption = ScreenshotAttachment.CaptionFor(i + 1, shots.Count, shots[i].Value[0], shots[i].Value[1]),
-                    });
             }
             catch (Exception e)
             {
                 Log.Error("Screenshot failed: " + e.Message);
             }
-            return result;
+            return set.IsEmpty ? null : set;
         }
 
         private static byte[] CaptureMonitor(RECT bounds, Rectangle? highlight, int maxWidth)

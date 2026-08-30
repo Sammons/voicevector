@@ -14,16 +14,43 @@ namespace VoiceVector.Shared
     {
         public byte[] Jpeg;
         public string Caption;
+    }
 
-        public static string CaptionFor(int index, int total, bool active, bool outlined)
+    /// <summary>The screenshots taken for one dictation: one JPEG per display,
+    /// the active display (where the text is inserted) first when known.
+    /// Persisted beside the entry as `<id>-screen-N.jpg`.</summary>
+    public sealed class ScreenshotSet
+    {
+        public List<byte[]> Images = new List<byte[]>();
+        /// <summary>0-based index of the active display, -1 when not knowable.</summary>
+        public int ActiveIndex = -1;
+        /// <summary>Whether the target window is outlined in red in the active image.</summary>
+        public bool Outlined;
+
+        public bool IsEmpty { get { return Images.Count == 0; } }
+
+        public static string Caption(int index, int total, bool activeKnown, bool active, bool outlined)
         {
             var text = "Display " + index + " of " + total;
-            if (active)
+            if (!activeKnown) text += " (which display is active is not known on this desktop)";
+            else if (active)
             {
                 text += " — ACTIVE: the dictated text will be inserted here";
                 if (outlined) text += "; the target window is outlined in red";
             }
             return text + ".";
+        }
+
+        public IList<ScreenshotAttachment> Attachments()
+        {
+            var list = new List<ScreenshotAttachment>();
+            for (int i = 0; i < Images.Count; i++)
+                list.Add(new ScreenshotAttachment
+                {
+                    Jpeg = Images[i],
+                    Caption = Caption(i + 1, Images.Count, ActiveIndex >= 0, ActiveIndex == i, ActiveIndex == i && Outlined),
+                });
+            return list;
         }
     }
 

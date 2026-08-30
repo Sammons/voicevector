@@ -3,6 +3,7 @@
 #include <gio/gio.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 VvEntry *vv_entry_new(void) {
     VvEntry *e = g_new0(VvEntry, 1);
@@ -24,6 +25,12 @@ void vv_entry_free(VvEntry *e) {
 }
 
 bool vv_entry_is_error(const VvEntry *e) { return g_str_has_prefix(e->status, "error"); }
+
+void vv_entry_attach(VvEntry *e, const VvScreenshotSet *set) {
+    e->screenshots = set ? (int)set->images->len : 0;
+    e->active_screenshot = set && set->active_index >= 0 ? set->active_index + 1 : 0;
+    e->screenshot_outline = set && set->active_index >= 0 && set->outlined;
+}
 
 VvLibrary *vv_library_new(const char *root) {
     VvLibrary *lib = g_new0(VvLibrary, 1);
@@ -146,6 +153,58 @@ void vv_library_delete(VvLibrary *lib, const VvEntry *e) {
         g_free(path); g_free(name);
     }
     g_free(dir);
+    vv_library_delete_screenshots(lib, e->id, e->folder);
+}
+
+/* ------------------------------------------- screenshots */
+
+void vv_library_delete_screenshots(VvLibrary *lib, const char *id, const char *folder) {
+    char *dir = vv_library_folder_path(lib, folder);
+    char *prefix = g_strconcat(id, "-screen-", NULL);
+    GDir *d = g_dir_open(dir, 0, NULL);
+    const char *name;
+    while (d && (name = g_dir_read_name(d))) {
+        if (g_str_has_prefix(name, prefix) && g_str_has_suffix(name, ".jpg")) {
+            char *path = g_build_filename(dir, name, NULL);
+            g_unlink(path); g_free(path);
+        }
+    }
+    if (d) g_dir_close(d);
+    g_free(prefix); g_free(dir);
+}
+
+void vv_library_save_screenshots(VvLibrary *lib, const char *id, const char *folder, const VvScreenshotSet *set) {
+    vv_library_delete_screenshots(lib, id, folder);
+    if (!set) return;
+    char *dir = vv_library_folder_path(lib, folder);
+    for (guint i = 0; i < set->images->len; i++) {
+        char *name = g_strdup_printf("%s-screen-%u.jpg", id, i + 1);
+        char *path = g_build_filename(dir, name, NULL);
+        gsize n; const char *data = g_bytes_get_data(g_ptr_array_index(set->images, i), &n);
+        g_file_set_contents(path, data, (gssize)n, NULL);
+        g_free(path); g_free(name);
+    }
+    g_free(dir);
+}
+
+VvScreenshotSet *vv_library_load_screenshots(VvLibrary *lib, const VvEntry *e) {
+    if (e->screenshots <= 0) return NULL;
+    char *dir = vv_library_folder_path(lib, e->folder);
+    VvScreenshotSet *set = vv_screenshot_set_new();
+    for (int i = 1; i <= e->screenshots; i++) {
+        char *name = g_strdup_printf("%s-screen-%d.jpg", e->id, i);
+        char *path = g_build_filename(dir, name, NULL);
+        char *data = NULL; gsize n = 0;
+        if (g_file_get_contents(path, &data, &n, NULL)) g_ptr_array_add(set->images, g_bytes_new_take(data, n));
+        g_free(path); g_free(name);
+    }
+    g_free(dir);
+    if (set->images->len == 0) { vv_screenshot_set_unref(set); return NULL; }
+    if (e->active_screenshot > 0 && e->active_screenshot <= (int)set->images->len) {
+        set->active_index = e->active_screenshot - 1;
+        set->outlined = e->screenshot_outline;
+    }
+    return set;
 }
 
 char *vv_library_audio_path(VvLibrary *lib, const VvEntry *e) {
@@ -177,6 +236,13 @@ char *vv_library_render(const VvEntry *e) {
     g_string_append_printf(sb, "stt: %s\n", e->stt_label);
     if (*e->cleanup_label) g_string_append_printf(sb, "cleanup: %s\n", e->cleanup_label);
     g_string_append_printf(sb, "status: %s\n", e->status);
+    if (e->screenshots > 0) {
+        g_string_append_printf(sb, "screenshots: %d\n", e->screenshots);
+        if (e->active_screenshot > 0) {
+            g_string_append_printf(sb, "activeScreenshot: %d\n", e->active_screenshot);
+            if (e->screenshot_outline) g_string_append(sb, "screenshotOutline: true\n");
+        }
+    }
     g_string_append(sb, "---\n\n");
     g_string_append(sb, e->cleaned);
     if (*e->raw && strcmp(e->raw, e->cleaned) != 0) {
@@ -232,6 +298,9 @@ VvEntry *vv_library_parse(const char *markdown, const char *id, const char *fold
                 } else if (strcmp(key, "stt") == 0) set_str(&e->stt_label, value);
                 else if (strcmp(key, "cleanup") == 0) set_str(&e->cleanup_label, value);
                 else if (strcmp(key, "status") == 0) set_str(&e->status, value);
+                else if (strcmp(key, "screenshots") == 0) e->screenshots = atoi(value);
+                else if (strcmp(key, "activeScreenshot") == 0) e->active_screenshot = atoi(value);
+                else if (strcmp(key, "screenshotOutline") == 0) e->screenshot_outline = strcmp(value, "true") == 0;
                 g_free(key); g_free(value);
             }
             body_start = (guint)end + 1;

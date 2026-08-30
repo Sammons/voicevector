@@ -12,6 +12,11 @@ all three apps share one version number.
   macOS and Windows that window is outlined in red in its screenshot. Linux
   crops the portal's desktop capture per monitor; Wayland hides the focused
   window, so with several displays the caption says the active one is unknown.
+- **Screenshots are saved with the entry.** `<id>-screen-N.jpg` beside the
+  WAV and Markdown, described by `screenshots` / `activeScreenshot` /
+  `screenshotOutline` front-matter keys (`docs/storage-format.md`). One set per
+  dictation, taken when the hotkey fires; a retry from the library reuses it
+  instead of capturing whatever is on screen now. Deleted with the entry.
 - **Fix (macOS):** the app crashed at launch when "Keep the microphone always
   warm" was on.
 

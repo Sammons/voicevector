@@ -115,6 +115,16 @@ enum SelfTest {
         expect(parsed.status == "complete", "markdown: status")
         expect(parsed.date == entry.date, "markdown: date")
 
+        var shot = entry
+        shot.attach(ScreenshotSet(images: [Data([1]), Data([2])], activeIndex: 0, outlined: true))
+        let shotRendered = Library.render(shot)
+        expect(shotRendered.contains("status: complete\nscreenshots: 2\nactiveScreenshot: 1\nscreenshotOutline: true\n---\n"),
+               "markdown: screenshot keys rendered after status")
+        let shotParsed = Library.parse(markdown: shotRendered, id: entry.id, folder: entry.folder)
+        expect(shotParsed.screenshots == 2 && shotParsed.activeScreenshot == 1 && shotParsed.screenshotOutline,
+               "markdown: screenshot keys round trip")
+        expect(!Library.render(entry).contains("screenshots:"), "markdown: no screenshot keys without screenshots")
+
         let bare = Library.parse(markdown: "---\ndate: 2026-08-25T12:00:00Z\nstatus: complete\n---\n\nJust text\n",
                                  id: "x", folder: "Inbox")
         expect(bare.cleaned == "Just text", "markdown: bare cleaned")
@@ -146,8 +156,21 @@ enum SelfTest {
         library.save(entry)
         expect(library.entry(folder: "Inbox", id: entry.id)?.cleaned == "updated", "library: entry updated")
 
+        let set = ScreenshotSet(images: [Data([0xFF, 0xD8, 1]), Data([0xFF, 0xD8, 2])], activeIndex: 1, outlined: false)
+        library.saveScreenshots(id: entry.id, folder: "Inbox", set)
+        entry.attach(set)
+        library.save(entry)
+        let loaded = library.loadScreenshots(library.entry(folder: "Inbox", id: entry.id)!)
+        expect(loaded?.images == set.images && loaded?.activeIndex == 1 && loaded?.outlined == false,
+               "library: screenshots saved beside the entry and reloaded")
+        expect(loaded?.attachments.map(\.caption) == ["Display 1 of 2.", "Display 2 of 2 — ACTIVE: the dictated text will be inserted here."],
+               "library: reloaded captions")
+        expect(library.entryCount(folder: "Inbox") == 1, "library: screenshot files are not entries")
+
         library.delete(entry)
         expect(library.entryCount(folder: "Inbox") == 0, "library: entry deleted")
+        expect(!FileManager.default.fileExists(atPath: library.folderURL("Inbox").appendingPathComponent(entry.screenshotFilename(1)).path),
+               "library: screenshots deleted with the entry")
     }
 
     // MARK: Config
@@ -201,10 +224,13 @@ enum SelfTest {
         expect(CleanupEngine.reviewMessage(draft: "Hi", instruction: "shorter")
                == "<draft>\nHi\n</draft>\n<instruction>\nshorter\n</instruction>",
                "review: message wraps draft and instruction")
-        expect(ScreenshotAttachment.caption(index: 1, total: 2, active: true, outlined: true)
-               == "Display 1 of 2 — ACTIVE: the dictated text will be inserted here; the target window is outlined in red."
-               && ScreenshotAttachment.caption(index: 2, total: 2, active: false, outlined: false) == "Display 2 of 2.",
+        let captions = ScreenshotSet(images: [Data([1]), Data([2])], activeIndex: 0, outlined: true).attachments.map(\.caption)
+        expect(captions == ["Display 1 of 2 — ACTIVE: the dictated text will be inserted here; the target window is outlined in red.",
+                            "Display 2 of 2."],
                "screenshot: per-display captions")
+        expect(ScreenshotSet(images: [Data([1])], activeIndex: nil, outlined: false).attachments.first?.caption
+               == "Display 1 of 1 (which display is active is not known on this desktop).",
+               "screenshot: unknown-active caption")
         expect(CleanupEngine.sanitize("<draft>\nHello\n</draft>", fallback: "x") == "Hello",
                "review: echoed draft delimiters stripped")
         var reviewProfile = DictationProfile(name: "Email", hotkey: .default, cleanupMode: .rich)

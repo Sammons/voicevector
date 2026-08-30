@@ -20,8 +20,24 @@ namespace VoiceVector.Shared
         public string Cleaned = "";
         public string Raw = "";
 
+        /// <summary>Screenshot context saved beside the entry (`<id>-screen-N.jpg`):
+        /// count, 1-based index of the active display (0 = unknown), and whether
+        /// the target window is outlined in that image.</summary>
+        public int Screenshots;
+        public int ActiveScreenshot;
+        public bool ScreenshotOutline;
+
         public string AudioFilename { get { return Id + ".wav"; } }
         public string MarkdownFilename { get { return Id + ".md"; } }
+        public string ScreenshotFilename(int index) { return Id + "-screen-" + index + ".jpg"; }
+
+        /// <summary>Records the set's shape in the front matter fields.</summary>
+        public void Attach(ScreenshotSet set)
+        {
+            Screenshots = set == null ? 0 : set.Images.Count;
+            ActiveScreenshot = set == null || set.ActiveIndex < 0 ? 0 : set.ActiveIndex + 1;
+            ScreenshotOutline = set != null && set.ActiveIndex >= 0 && set.Outlined;
+        }
         public bool IsError { get { return Status.StartsWith("error"); } }
     }
 
@@ -124,6 +140,50 @@ namespace VoiceVector.Shared
             var dir = FolderPath(entry.Folder);
             try { File.Delete(Path.Combine(dir, entry.MarkdownFilename)); } catch { }
             try { File.Delete(Path.Combine(dir, entry.AudioFilename)); } catch { }
+            DeleteScreenshots(entry.Id, entry.Folder);
+        }
+
+        // -- screenshots (`<id>-screen-N.jpg`) --
+
+        /// <summary>Writes the set's JPEGs beside the entry (replacing any earlier set).</summary>
+        public void SaveScreenshots(string id, string folder, ScreenshotSet set)
+        {
+            DeleteScreenshots(id, folder);
+            if (set == null) return;
+            var dir = FolderPath(folder);
+            for (int i = 0; i < set.Images.Count; i++)
+            {
+                try { File.WriteAllBytes(Path.Combine(dir, id + "-screen-" + (i + 1) + ".jpg"), set.Images[i]); }
+                catch (Exception e) { Log.Error("Failed to save screenshot " + (i + 1) + " for " + id + ": " + e.Message); }
+            }
+        }
+
+        /// <summary>The set recorded in the entry's front matter, if its files are present.</summary>
+        public ScreenshotSet LoadScreenshots(Entry entry)
+        {
+            if (entry.Screenshots <= 0) return null;
+            var dir = FolderPath(entry.Folder);
+            var set = new ScreenshotSet();
+            for (int i = 1; i <= entry.Screenshots; i++)
+            {
+                try { set.Images.Add(File.ReadAllBytes(Path.Combine(dir, entry.ScreenshotFilename(i)))); }
+                catch { }
+            }
+            if (set.IsEmpty) return null;
+            if (entry.ActiveScreenshot > 0 && entry.ActiveScreenshot <= set.Images.Count)
+            {
+                set.ActiveIndex = entry.ActiveScreenshot - 1;
+                set.Outlined = entry.ScreenshotOutline;
+            }
+            return set;
+        }
+
+        public void DeleteScreenshots(string id, string folder)
+        {
+            var dir = FolderPath(folder);
+            if (!Directory.Exists(dir)) return;
+            foreach (var file in Directory.GetFiles(dir, id + "-screen-*.jpg"))
+                try { File.Delete(file); } catch { }
         }
 
         public string AudioPath(Entry entry)
@@ -150,6 +210,15 @@ namespace VoiceVector.Shared
             if (entry.CleanupLabel.Length > 0)
                 sb.Append("cleanup: ").Append(entry.CleanupLabel).Append('\n');
             sb.Append("status: ").Append(entry.Status).Append('\n');
+            if (entry.Screenshots > 0)
+            {
+                sb.Append("screenshots: ").Append(entry.Screenshots).Append('\n');
+                if (entry.ActiveScreenshot > 0)
+                {
+                    sb.Append("activeScreenshot: ").Append(entry.ActiveScreenshot).Append('\n');
+                    if (entry.ScreenshotOutline) sb.Append("screenshotOutline: true\n");
+                }
+            }
             sb.Append("---\n\n");
             sb.Append(entry.Cleaned);
             if (entry.Raw.Length > 0 && entry.Raw != entry.Cleaned)
@@ -195,6 +264,9 @@ namespace VoiceVector.Shared
                             case "stt": entry.SttLabel = value; break;
                             case "cleanup": entry.CleanupLabel = value; break;
                             case "status": entry.Status = value; break;
+                            case "screenshots": int.TryParse(value, out entry.Screenshots); break;
+                            case "activeScreenshot": int.TryParse(value, out entry.ActiveScreenshot); break;
+                            case "screenshotOutline": entry.ScreenshotOutline = value == "true"; break;
                         }
                     }
                     lines.RemoveRange(0, end + 1);

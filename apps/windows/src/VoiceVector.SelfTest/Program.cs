@@ -135,6 +135,15 @@ namespace VoiceVector.SelfTest
             const string macRendered = "---\ndate: 2026-08-25T12:00:00Z\nduration: 12.4\naudio: 20260825-120000.wav\nstt: ElevenLabs/scribe_v2\ncleanup: Fireworks/gpt-oss-20b\nstatus: complete\n---\n\nHello world.\n\n- bullet one\n- bullet two\n\n## Raw transcript\n\num hello world uh bullet one bullet two\n";
             Expect(Library.Render(entry) == macRendered, "markdown: byte-identical to macOS rendering");
 
+            var shot = Library.Parse(macRendered, entry.Id, entry.Folder);
+            shot.Attach(new ScreenshotSet { Images = { new byte[] { 1 }, new byte[] { 2 } }, ActiveIndex = 0, Outlined = true });
+            var shotRendered = Library.Render(shot);
+            Expect(shotRendered.Contains("status: complete\nscreenshots: 2\nactiveScreenshot: 1\nscreenshotOutline: true\n---\n"),
+                   "markdown: screenshot keys rendered after status");
+            var shotParsed = Library.Parse(shotRendered, entry.Id, entry.Folder);
+            Expect(shotParsed.Screenshots == 2 && shotParsed.ActiveScreenshot == 1 && shotParsed.ScreenshotOutline,
+                   "markdown: screenshot keys round trip");
+
             var bare = Library.Parse("---\ndate: 2026-08-25T12:00:00Z\nstatus: complete\n---\n\nJust text\n", "x", "Inbox");
             Expect(bare.Cleaned == "Just text" && bare.Raw == "Just text", "markdown: bare body");
         }
@@ -162,8 +171,20 @@ namespace VoiceVector.SelfTest
                 entry.Cleaned = "updated";
                 library.Save(entry);
                 Expect(library.GetEntry("Inbox", entry.Id).Cleaned == "updated", "library: entry updated");
+                var set = new ScreenshotSet { Images = { new byte[] { 0xFF, 0xD8, 1 }, new byte[] { 0xFF, 0xD8, 2 } }, ActiveIndex = 1 };
+                library.SaveScreenshots(entry.Id, "Inbox", set);
+                entry.Attach(set);
+                library.Save(entry);
+                var loaded = library.LoadScreenshots(library.GetEntry("Inbox", entry.Id));
+                Expect(loaded != null && loaded.Images.Count == 2 && loaded.Images[1][2] == 2 && loaded.ActiveIndex == 1 && !loaded.Outlined,
+                       "library: screenshots saved beside the entry and reloaded");
+                Expect(loaded.Attachments()[1].Caption == "Display 2 of 2 — ACTIVE: the dictated text will be inserted here."
+                       && loaded.Attachments()[0].Caption == "Display 1 of 2.", "library: reloaded captions");
+                Expect(library.EntryCount("Inbox") == 1, "library: screenshot files are not entries");
                 library.Delete(entry);
                 Expect(library.EntryCount("Inbox") == 0, "library: entry deleted");
+                Expect(!File.Exists(Path.Combine(library.FolderPath("Inbox"), entry.ScreenshotFilename(1))),
+                       "library: screenshots deleted with the entry");
             }
             finally
             {
@@ -314,10 +335,11 @@ namespace VoiceVector.SelfTest
             Expect(CleanupEngine.ReviewMessage("Hi", "shorter")
                    == "<draft>\nHi\n</draft>\n<instruction>\nshorter\n</instruction>",
                    "review: message wraps draft and instruction");
-            Expect(ScreenshotAttachment.CaptionFor(1, 2, true, true)
-                   == "Display 1 of 2 — ACTIVE: the dictated text will be inserted here; the target window is outlined in red."
-                   && ScreenshotAttachment.CaptionFor(2, 2, false, false) == "Display 2 of 2.",
-                   "screenshot: per-display captions");
+            var caps = new ScreenshotSet { Images = { new byte[] { 1 }, new byte[] { 2 } }, ActiveIndex = 0, Outlined = true }.Attachments();
+            Expect(caps[0].Caption == "Display 1 of 2 — ACTIVE: the dictated text will be inserted here; the target window is outlined in red."
+                   && caps[1].Caption == "Display 2 of 2.", "screenshot: per-display captions");
+            Expect(new ScreenshotSet { Images = { new byte[] { 1 } } }.Attachments()[0].Caption
+                   == "Display 1 of 1 (which display is active is not known on this desktop).", "screenshot: unknown-active caption");
             Expect(CleanupEngine.PostProcess("<draft>\nHello\n</draft>", "x") == "Hello",
                    "review: echoed draft delimiters stripped");
             var reviewProfile = new DictationProfile

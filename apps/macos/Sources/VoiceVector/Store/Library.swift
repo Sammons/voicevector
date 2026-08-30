@@ -11,9 +11,23 @@ struct Entry: Identifiable, Equatable {
     var status: String      // "complete" | "error: ..."
     var cleaned: String
     var raw: String
+    /// Screenshot context saved beside the entry (`<id>-screen-N.jpg`):
+    /// count, 1-based index of the active display (0 = unknown), and
+    /// whether the target window is outlined in that image.
+    var screenshots: Int = 0
+    var activeScreenshot: Int = 0
+    var screenshotOutline: Bool = false
 
     var audioFilename: String { id + ".wav" }
     var markdownFilename: String { id + ".md" }
+    func screenshotFilename(_ index: Int) -> String { "\(id)-screen-\(index).jpg" }
+
+    /// Records `set`'s shape in the front matter fields.
+    mutating func attach(_ set: ScreenshotSet?) {
+        screenshots = set?.images.count ?? 0
+        activeScreenshot = set?.activeIndex.map { $0 + 1 } ?? 0
+        screenshotOutline = (set?.activeIndex != nil) && (set?.outlined ?? false)
+    }
 }
 
 /// Files-first store: folders are directories under the library root, entries
@@ -115,6 +129,39 @@ final class Library {
         let dir = folderURL(entry.folder)
         try? FileManager.default.removeItem(at: dir.appendingPathComponent(entry.markdownFilename))
         try? FileManager.default.removeItem(at: dir.appendingPathComponent(entry.audioFilename))
+        deleteScreenshots(id: entry.id, folder: entry.folder)
+    }
+
+    // MARK: Screenshots (`<id>-screen-N.jpg`)
+
+    /// Writes the set's JPEGs beside the entry (replacing any earlier set).
+    func saveScreenshots(id: String, folder: String, _ set: ScreenshotSet?) {
+        deleteScreenshots(id: id, folder: folder)
+        guard let set else { return }
+        let dir = folderURL(folder)
+        for (i, jpeg) in set.images.enumerated() {
+            do { try jpeg.write(to: dir.appendingPathComponent("\(id)-screen-\(i + 1).jpg"), options: .atomic) }
+            catch { Log.error("Failed to save screenshot \(i + 1) for \(id): \(error.localizedDescription)") }
+        }
+    }
+
+    /// The set recorded in the entry's front matter, if its files are present.
+    func loadScreenshots(_ entry: Entry) -> ScreenshotSet? {
+        guard entry.screenshots > 0 else { return nil }
+        let dir = folderURL(entry.folder)
+        let images = (1...entry.screenshots).compactMap { try? Data(contentsOf: dir.appendingPathComponent(entry.screenshotFilename($0))) }
+        guard !images.isEmpty else { return nil }
+        let active = entry.activeScreenshot > 0 && entry.activeScreenshot <= images.count ? entry.activeScreenshot - 1 : nil
+        return ScreenshotSet(images: images, activeIndex: active, outlined: active != nil && entry.screenshotOutline)
+    }
+
+    func deleteScreenshots(id: String, folder: String) {
+        let dir = folderURL(folder)
+        let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil,
+                                                                  options: .skipsHiddenFiles)) ?? []
+        for file in files where file.lastPathComponent.hasPrefix(id + "-screen-") && file.pathExtension == "jpg" {
+            try? FileManager.default.removeItem(at: file)
+        }
     }
 
     func audioURL(_ entry: Entry) -> URL {
@@ -137,6 +184,13 @@ final class Library {
         lines.append("stt: \(entry.sttLabel)")
         if !entry.cleanupLabel.isEmpty { lines.append("cleanup: \(entry.cleanupLabel)") }
         lines.append("status: \(entry.status)")
+        if entry.screenshots > 0 {
+            lines.append("screenshots: \(entry.screenshots)")
+            if entry.activeScreenshot > 0 {
+                lines.append("activeScreenshot: \(entry.activeScreenshot)")
+                if entry.screenshotOutline { lines.append("screenshotOutline: true") }
+            }
+        }
         lines.append("---")
         lines.append("")
         lines.append(entry.cleaned)
@@ -166,6 +220,9 @@ final class Library {
                 case "stt": entry.sttLabel = value
                 case "cleanup": entry.cleanupLabel = value
                 case "status": entry.status = value
+                case "screenshots": entry.screenshots = Int(value) ?? 0
+                case "activeScreenshot": entry.activeScreenshot = Int(value) ?? 0
+                case "screenshotOutline": entry.screenshotOutline = value == "true"
                 default: break
                 }
             }

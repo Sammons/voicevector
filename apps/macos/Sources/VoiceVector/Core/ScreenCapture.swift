@@ -5,14 +5,37 @@ import CoreGraphics
 struct ScreenshotAttachment {
     let jpeg: Data
     let caption: String
+}
 
-    static func caption(index: Int, total: Int, active: Bool, outlined: Bool) -> String {
+/// The screenshots taken for one dictation: one JPEG per display, the active
+/// display (where the text is inserted) first when known. Persisted beside
+/// the entry as `<id>-screen-N.jpg` (docs/storage-format.md).
+struct ScreenshotSet {
+    var images: [Data]
+    /// 0-based index of the active display, nil when not knowable.
+    var activeIndex: Int?
+    /// Whether the target window is outlined in red in the active image.
+    var outlined: Bool
+
+    var isEmpty: Bool { images.isEmpty }
+
+    static func caption(index: Int, total: Int, activeKnown: Bool, active: Bool, outlined: Bool) -> String {
         var text = "Display \(index) of \(total)"
-        if active {
+        if !activeKnown {
+            text += " (which display is active is not known on this desktop)"
+        } else if active {
             text += " — ACTIVE: the dictated text will be inserted here"
             if outlined { text += "; the target window is outlined in red" }
         }
         return text + "."
+    }
+
+    var attachments: [ScreenshotAttachment] {
+        images.enumerated().map { i, jpeg in
+            ScreenshotAttachment(jpeg: jpeg, caption: Self.caption(
+                index: i + 1, total: images.count, activeKnown: activeIndex != nil,
+                active: activeIndex == i, outlined: activeIndex == i && outlined))
+        }
     }
 }
 
@@ -33,8 +56,8 @@ enum ScreenCapture {
     /// One capture per display, the display holding the frontmost window
     /// first (its captioned "active", with the target window outlined in red),
     /// then the rest left-to-right. Empty when permission is missing.
-    static func allScreens(maxWidth: CGFloat = 1280) -> [ScreenshotAttachment] {
-        guard permissionGranted else { return [] }
+    static func allScreens(maxWidth: CGFloat = 1280) -> ScreenshotSet? {
+        guard permissionGranted else { return nil }
         let target = targetWindowBounds()
         let active = activeScreen(targetBounds: target)
         let ordered = NSScreen.screens.sorted { a, b in
@@ -42,7 +65,7 @@ enum ScreenCapture {
             if fa != fb { return fa }
             return a.frame.minX < b.frame.minX
         }
-        var shots: [(jpeg: Data, active: Bool, outlined: Bool)] = []
+        var set = ScreenshotSet(images: [], activeIndex: nil, outlined: false)
         for screen in ordered {
             guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
                   let image = CGDisplayCreateImage(number),
@@ -57,13 +80,10 @@ enum ScreenCapture {
                                    width: target.width * scale, height: target.height * scale)
             }
             guard let data = jpeg(image, maxWidth: maxWidth, highlight: highlight) else { continue }
-            shots.append((data, isActive, highlight != nil))
+            if isActive { set.activeIndex = set.images.count; set.outlined = highlight != nil }
+            set.images.append(data)
         }
-        // Captions count captures, not screens, in case one failed.
-        return shots.enumerated().map { i, shot in
-            ScreenshotAttachment(jpeg: shot.jpeg, caption: ScreenshotAttachment.caption(
-                index: i + 1, total: shots.count, active: shot.active, outlined: shot.outlined))
-        }
+        return set.isEmpty ? nil : set
     }
 
     /// Bounds (global, top-left origin) of the frontmost app's front window.

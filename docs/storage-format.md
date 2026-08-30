@@ -10,6 +10,7 @@ viewers. A folder synced between machines is a shared library.
   <Folder>/                        one directory per user folder ("Inbox" always exists)
     <id>.wav                       original recording
     <id>.md                        transcript
+    <id>-screen-N.jpg              optional: screenshot context, one per display (N = 1…)
 ```
 
 - `id` = local timestamp `yyyyMMdd-HHmmss` (POSIX locale), with `-2`, `-3`…
@@ -26,6 +27,9 @@ audio: 20260825-161530.wav          # sibling file name
 stt: ElevenLabs/scribe_v2           # provider name/model
 cleanup: Vercel AI Gateway/openai/gpt-4o-mini   # omitted if cleanup never configured
 status: complete                    # "complete" | "error: <message>"
+screenshots: 2                      # optional: number of <id>-screen-N.jpg files
+activeScreenshot: 1                 # optional: 1-based N of the display the text went into (absent = unknown)
+screenshotOutline: true             # optional: the target window is outlined in red in that image
 ---
 
 <cleaned text — the primary body>
@@ -43,3 +47,8 @@ Parsing rules (must match in both apps):
   text. No raw section ⇒ raw = cleaned.
 - `cleanup` values may carry suffixes: `… (failed — raw used)` or
   `not run — no cleanup provider selected`; UIs surface these as states.
+- Screenshot keys are written only when screenshots exist (`screenshots` first,
+  then `activeScreenshot` only when known, then `screenshotOutline` only when
+  true). The JPEGs (≤1280 px wide) are written when the hotkey fires — one set
+  per entry, never replaced by later revisions — and deleted with the entry.
+  A retry from the library reuses the saved set instead of capturing again.

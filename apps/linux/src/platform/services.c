@@ -199,7 +199,7 @@ static GBytes *pixbuf_jpeg(GdkPixbuf *pix) {
     return jpeg;
 }
 
-GPtrArray *vv_screenshots(void) {
+VvScreenshotSet *vv_screenshots(void) {
     if (!bus) bus = g_bus_get_sync(G_BUS_TYPE_SESSION, NULL, NULL);
     if (!bus) return NULL;
     GVariantBuilder ob; g_variant_builder_init(&ob, G_VARIANT_TYPE_VARDICT);
@@ -209,7 +209,7 @@ GPtrArray *vv_screenshots(void) {
     if (!r) { vv_log_error("Screenshot portal: %s", error); g_free(error); return NULL; }
     const char *uri = NULL;
     g_variant_lookup(r, "uri", "&s", &uri);
-    GPtrArray *shots = NULL;
+    VvScreenshotSet *set = NULL;
     if (uri) {
         GFile *file = g_file_new_for_uri(uri);
         char *path = g_file_get_path(file);
@@ -248,14 +248,11 @@ GPtrArray *vv_screenshots(void) {
                 }
             }
             if (jpegs->len == 0) { GBytes *j = pixbuf_jpeg(pix); if (j) g_ptr_array_add(jpegs, j); }
-            shots = g_ptr_array_new_with_free_func((GDestroyNotify)vv_screenshot_free);
-            for (guint i = 0; i < jpegs->len; i++) {
-                /* Wayland does not tell us which window is focused; with one
-                 * display that is moot, with several the caption says so. */
-                bool known = jpegs->len == 1;
-                g_ptr_array_add(shots, vv_screenshot_new(g_ptr_array_index(jpegs, i),
-                                                         vv_screenshot_caption((int)i + 1, (int)jpegs->len, known, known, false)));
-            }
+            set = vv_screenshot_set_new();
+            for (guint i = 0; i < jpegs->len; i++) g_ptr_array_add(set->images, g_bytes_ref(g_ptr_array_index(jpegs, i)));
+            /* Wayland does not tell us which window is focused; with one
+             * display that is moot, with several the caption says so. */
+            if (set->images->len == 1) set->active_index = 0;
             g_ptr_array_unref(jpegs);
             g_free(geo);
             g_object_unref(pix);
@@ -264,6 +261,6 @@ GPtrArray *vv_screenshots(void) {
         g_object_unref(file);
     }
     g_variant_unref(r);
-    if (shots && shots->len == 0) { g_ptr_array_unref(shots); shots = NULL; }
-    return shots;
+    if (set && set->images->len == 0) { vv_screenshot_set_unref(set); set = NULL; }
+    return set;
 }
