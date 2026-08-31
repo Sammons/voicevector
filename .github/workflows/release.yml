@@ -18,8 +18,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           sh scripts/release-notes.sh "$GITHUB_REF_NAME" > notes.md
+          # A semver pre-release suffix (v1.2.3-beta.1) → mark it prerelease so
+          # it never becomes "Latest": the website's /releases/latest links and
+          # the in-app updater's releases/latest API both skip prereleases.
+          case "$GITHUB_REF_NAME" in
+            *-*) PRE=--prerelease ;;
+            *)   PRE= ;;
+          esac
           gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
-            || gh release create "$GITHUB_REF_NAME" --title "VoiceVector $GITHUB_REF_NAME" --notes-file notes.md
+            || gh release create "$GITHUB_REF_NAME" --title "VoiceVector $GITHUB_REF_NAME" --notes-file notes.md $PRE
 
   windows:
     name: Release Windows (win-x64)

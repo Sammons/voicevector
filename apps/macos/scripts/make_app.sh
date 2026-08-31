@@ -21,8 +21,14 @@ cp "$BIN" "$APP/Contents/MacOS/VoiceVector"
 cp scripts/Info.plist "$APP/Contents/Info.plist"
 
 # Version stamp: releases set VV_VERSION (e.g. 0.2.0); local builds are -dev.
+# CFBundleShortVersionString must be numeric (X.Y.Z), so a pre-release tag like
+# 0.5.0-beta.1 stamps 0.5.0 as the short version and the full string as the
+# build version (which is permissive).
 VERSION="${VV_VERSION:-0.0.0-dev}"
-/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
+SHORT_VERSION="${VERSION%%-*}"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $SHORT_VERSION" "$APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$APP/Contents/Info.plist" 2>/dev/null \
+  || /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string $VERSION" "$APP/Contents/Info.plist"
 
 echo "› generating icon"
 ICONSET="build/AppIcon.iconset"

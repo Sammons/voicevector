@@ -27,7 +27,8 @@ adding fields must never reset a user's config.
       "reviewProviderID": null,         // model that applies spoken changes; null = cleanup provider
       "screenshotContext": false        // attach screenshots of every display to cleanup + review calls
       "routerEnabled": false,           // AI routing (needs reviewBeforePaste); see docs/multi-machine.md
-      "routerProviderID": null          // chat provider for the router; null = cleanup provider
+      "routerProviderID": null,         // chat provider for the router; null = cleanup provider
+      "autoSubmit": false               // press Enter after pasting (chat/terminal/routed delivery)
   } ],
   //  Any number of hotkeys, each with its own cleanup policy; always ≥ 1.
   //  The first profile is the "primary" one shown in the wizard/status line.
