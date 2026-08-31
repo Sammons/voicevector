@@ -34,44 +34,69 @@ enum WindowInventory {
         }
     }
 
-    /// Activates the app owning `windowID`, raises that window, and confirms
-    /// it actually became frontmost. Returns false when the window is gone OR
-    /// the system refused the focus change — callers must NOT paste on false,
-    /// or the text lands in whatever was already focused.
+    /// Brings the app owning `windowID` to the front, raises that window, and
+    /// confirms it actually became frontmost. Returns false when the window is
+    /// gone OR the system refused the focus change — callers must NOT paste on
+    /// false, or the text lands in whatever was already focused.
+    ///
+    /// A background/accessory app can't reliably use `NSRunningApplication`
+    /// activation (macOS focus-stealing prevention denies it when we aren't the
+    /// active app). The Accessibility API does not hit that wall — we already
+    /// hold that permission — so raise the window and set the application's
+    /// `AXFrontmost`, with a System Events fallback, then verify.
     @discardableResult
     static func activate(windowID: UInt32) -> Bool {
-        guard let target = list().first(where: { $0.id == windowID }),
-              let app = NSRunningApplication(processIdentifier: target.pid) else { return false }
+        guard let target = list().first(where: { $0.id == windowID }) else { return false }
+        let pid = target.pid
 
-        // Raise the specific window first (so activating brings *it* forward,
-        // not the app's last-focused window), then activate the app.
-        raiseWindow(pid: target.pid, windowID: windowID)
-        app.activate(options: [.activateAllWindows])
-        raiseWindow(pid: target.pid, windowID: windowID)
+        raiseViaAccessibility(pid: pid, windowID: windowID)
+        NSRunningApplication(processIdentifier: pid)?.activate(options: [.activateAllWindows])
+        if pollFrontmost(pid: pid, timeout: 0.6) { return true }
 
-        // macOS can silently deny a focus change from a background app; poll
-        // briefly and report whether the target genuinely came to the front.
-        let deadline = Date().addingTimeInterval(0.8)
-        while Date() < deadline {
-            if NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid { return true }
-            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
-        }
-        return NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid
+        // Last resort: ask System Events to front the process (uses the
+        // Accessibility permission, works from a background app).
+        raiseViaSystemEvents(pid: pid)
+        return pollFrontmost(pid: pid, timeout: 0.6)
     }
 
-    private static func raiseWindow(pid: pid_t, windowID: UInt32) {
-        let element = AXUIElementCreateApplication(pid)
+    private static func pollFrontmost(pid: pid_t, timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            if NSWorkspace.shared.frontmostApplication?.processIdentifier == pid { return true }
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.04))
+        } while Date() < deadline
+        return NSWorkspace.shared.frontmostApplication?.processIdentifier == pid
+    }
+
+    private static func raiseViaAccessibility(pid: pid_t, windowID: UInt32) {
+        let appElement = AXUIElementCreateApplication(pid)
         var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXWindowsAttribute as CFString, &value) == .success,
-              let windows = value as? [AXUIElement] else { return }
-        for window in windows {
-            var id: UInt32 = 0
-            if _AXUIElementGetWindow(window, &id) == .success, id == windowID {
-                AXUIElementSetAttributeValue(window, kAXMainAttribute as CFString, kCFBooleanTrue)
-                AXUIElementPerformAction(window, kAXRaiseAction as CFString)
-                break
+        if AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &value) == .success,
+           let windows = value as? [AXUIElement] {
+            for window in windows {
+                var id: UInt32 = 0
+                if _AXUIElementGetWindow(window, &id) == .success, id == windowID {
+                    AXUIElementSetAttributeValue(window, kAXMainAttribute as CFString, kCFBooleanTrue)
+                    AXUIElementSetAttributeValue(window, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+                    AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+                    break
+                }
             }
         }
+        // Bringing the whole app forward is what actually moves keyboard focus.
+        AXUIElementSetAttributeValue(appElement, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+    }
+
+    private static func raiseViaSystemEvents(pid: pid_t) {
+        let source = """
+        tell application "System Events"
+            set theProc to the first process whose unix id is \(pid)
+            set frontmost of theProc to true
+        end tell
+        """
+        var error: NSDictionary?
+        NSAppleScript(source: source)?.executeAndReturnError(&error)
+        if let error { Log.error("System Events front failed: \(error)") }
     }
 
     /// Router input: one numbered line per window.

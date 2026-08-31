@@ -31,6 +31,9 @@ namespace VoiceVector.Win.Services
         [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
         [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hWnd, int cmd);
         [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")] private static extern bool BringWindowToTop(IntPtr hWnd);
+        [DllImport("user32.dll")] private static extern bool AttachThreadInput(uint idAttach, uint idTo, bool attach);
+        [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
 
         private const int GWL_EXSTYLE = -20;
         private const int WS_EX_TOOLWINDOW = 0x80;
@@ -71,9 +74,28 @@ namespace VoiceVector.Win.Services
             var hwnd = new IntPtr(unchecked((int)id));
             if (!IsWindowVisible(hwnd)) return false;
             if (IsIconic(hwnd)) ShowWindow(hwnd, SW_RESTORE);
-            SetForegroundWindow(hwnd);
-            // Foreground changes from a background process are often denied
-            // (taskbar flash instead); poll to see whether it really happened.
+
+            // A background process is normally denied SetForegroundWindow.
+            // Attaching our input thread to the target's foreground thread
+            // lifts that restriction (the standard focus-stealing workaround).
+            var foreground = GetForegroundWindow();
+            uint targetThread = GetWindowThreadProcessId(hwnd, out _);
+            uint foreThread = foreground == IntPtr.Zero ? 0 : GetWindowThreadProcessId(foreground, out _);
+            uint ourThread = GetCurrentThreadId();
+            bool attachedFore = foreThread != 0 && foreThread != targetThread
+                                && AttachThreadInput(ourThread, foreThread, true);
+            bool attachedTarget = targetThread != ourThread
+                                  && AttachThreadInput(ourThread, targetThread, true);
+            try
+            {
+                BringWindowToTop(hwnd);
+                SetForegroundWindow(hwnd);
+            }
+            finally
+            {
+                if (attachedTarget) AttachThreadInput(ourThread, targetThread, false);
+                if (attachedFore) AttachThreadInput(ourThread, foreThread, false);
+            }
             for (int i = 0; i < 16; i++)
             {
                 if (GetForegroundWindow() == hwnd) return true;
