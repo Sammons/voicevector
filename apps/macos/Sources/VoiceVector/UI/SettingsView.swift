@@ -776,6 +776,12 @@ struct MultiMachineSettings: View {
                                 Spacer()
                             }
                             .font(.caption)
+                            if peer.address.trimmingCharacters(in: .whitespaces).isEmpty {
+                                Label("Set this machine's address (its tailnet or LAN IP) to route to it.",
+                                      systemImage: "exclamationmark.triangle.fill")
+                                    .font(.caption2)
+                                    .foregroundStyle(.orange)
+                            }
                         }
                         .padding(.vertical, 2)
                         if peer.fingerprint != app.config.multiMachine.peers.last?.fingerprint { Divider() }

@@ -6,6 +6,13 @@ all three apps share one version number.
 
 ## Unreleased
 
+- **Cross-machine routing actually reaches paired machines.** Pairing now
+  records the peer's network address on *both* sides (the receiving side reads
+  it from the connection), so you no longer have to type it in by hand. And a
+  paired machine is offered to the router even when it isn't sharing its
+  screens — "send this to <machine>" routes to its focused window (window 0);
+  sharing screens still adds per-window targeting. (Delivery into a machine
+  still requires that machine's "May paste into me" permission.)
 - **Auto-submit (press Enter after pasting)** — a per-hotkey option, off by
   default. After the text is pasted the app presses Enter, so a dictated chat
   message or terminal command is sent without touching the keyboard. It also
