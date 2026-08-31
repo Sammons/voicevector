@@ -454,6 +454,7 @@ final class PeerService {
     /// One peer's context, or nil on any failure (pin mismatch included).
     func fetchContext(peer: PeerRef, completion: @escaping (MachineContext?) -> Void) {
         guard !peer.address.isEmpty else { completion(nil); return }
+        Log.info("fetchContext: connecting to \(peer.name) (\(peer.address))")
         openSession(address: peer.address, purpose: "peer") { [self] connection, reader, _, fingerprint in
             guard let connection, fingerprint == peer.fingerprint else {
                 connection?.cancel()
@@ -465,9 +466,11 @@ final class PeerService {
                 readFrame(connection, reader) { response in
                     connection.cancel()
                     guard let response, response["t"] as? String == "context" else {
+                        Log.error("fetchContext \(peer.name): bad/no response (\((response?["err"] as? String) ?? "nil"))")
                         DispatchQueue.main.async { completion(nil) }; return
                     }
                     let machine = response["machine"] as? String ?? peer.name
+                    Log.info("fetchContext \(peer.name): \((response["windows"] as? [[String: Any]] ?? []).count) windows")
                     let screens = (response["screens"] as? [[String: Any]] ?? []).compactMap { s -> ScreenshotAttachment? in
                         guard let b64 = s["jpeg"] as? String, let jpeg = Data(base64Encoded: b64) else { return nil }
                         let caption = s["caption"] as? String ?? ""

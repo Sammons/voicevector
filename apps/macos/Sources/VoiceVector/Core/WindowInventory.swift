@@ -99,6 +99,75 @@ enum WindowInventory {
         if let error { Log.error("System Events front failed: \(error)") }
     }
 
+    /// After foregrounding an app, its text input often isn't focused, so a
+    /// synthesized paste lands nowhere. Walk the focused window's Accessibility
+    /// tree and focus the first editable text field/area (the chat/terminal
+    /// input), so the paste goes where the user expects. Best-effort.
+    /// Focus a text input in the frontmost app (after we've foregrounded it).
+    @discardableResult
+    static func focusFrontmostTextInput() -> Bool {
+        guard let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier else { return false }
+        return focusTextInput(pid: pid)
+    }
+
+    @discardableResult
+    static func focusTextInput(pid: pid_t) -> Bool {
+        let app = AXUIElementCreateApplication(pid)
+        var windowRef: CFTypeRef?
+        // Prefer the app's focused window; fall back to its main window.
+        if AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &windowRef) != .success {
+            AXUIElementCopyAttributeValue(app, kAXMainWindowAttribute as CFString, &windowRef)
+        }
+        guard let windowRef else { return false }
+        let window = windowRef as! AXUIElement
+        // If something editable is already focused, leave it.
+        var focused: CFTypeRef?
+        if AXUIElementCopyAttributeValue(app, kAXFocusedUIElementAttribute as CFString, &focused) == .success,
+           let element = focused, isEditable(element as! AXUIElement) { return true }
+        guard let field = firstTextInput(in: window) else { return false }
+        let result = AXUIElementSetAttributeValue(field, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+        return result == .success
+    }
+
+    private static func isEditable(_ element: AXUIElement) -> Bool {
+        var role: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role) == .success,
+              let r = role as? String else { return false }
+        if r == kAXTextFieldRole || r == kAXTextAreaRole { return true }
+        // Web content (Electron/browser) exposes editable areas via a settable value.
+        var settable: DarwinBoolean = false
+        if AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable) == .success, settable.boolValue {
+            return r == "AXTextArea" || r == "AXTextField" || r == "AXComboBox"
+        }
+        return false
+    }
+
+    /// Breadth-first search for an editable text element in the window. Prefers
+    /// a text AREA (chat/terminal inputs) but accepts a single-line field.
+    private static func firstTextInput(in window: AXUIElement) -> AXUIElement? {
+        var queue: [(AXUIElement, Int)] = [(window, 0)]
+        var fallbackField: AXUIElement?
+        var scanned = 0
+        while !queue.isEmpty, scanned < 4000 {
+            let (element, depth) = queue.removeFirst()
+            scanned += 1
+            var role: CFTypeRef?
+            if AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role) == .success,
+               let r = role as? String, isEditable(element) {
+                if r == kAXTextAreaRole { return element }        // best match
+                if fallbackField == nil { fallbackField = element } // remember a field
+            }
+            if depth < 16 {
+                var childrenRef: CFTypeRef?
+                if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef) == .success,
+                   let children = childrenRef as? [AXUIElement] {
+                    for child in children { queue.append((child, depth + 1)) }
+                }
+            }
+        }
+        return fallbackField
+    }
+
     /// Router input: one numbered line per window.
     static func describe(_ windows: [WindowInfo]) -> String {
         windows.map { window in

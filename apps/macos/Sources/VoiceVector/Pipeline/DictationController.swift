@@ -306,9 +306,11 @@ final class DictationController: ObservableObject {
                 guard review?.slot.id == id else { return }
                 guard let verdict = CleanupEngine.parseRouterVerdict(reply),
                       CleanupEngine.routerVerdictValid(verdict, catalog: catalog) else {
+                    Log.info("Router: unusable reply \(reply.prefix(120)) — retrying")
                     correction = CleanupEngine.routerCorrection(reply)
                     continue
                 }
+                Log.info("Router: machines=[\(catalog.map { $0.machine }.joined(separator: ", "))] verdict=\(verdict.machine)/win\(verdict.window)")
                 apply(verdict: verdict, contexts: contexts, sessionID: id, machineName: machineName)
                 return
             }
@@ -345,7 +347,9 @@ final class DictationController: ObservableObject {
             review?.routeTarget = RouteTarget(machine: context.machine,
                                               window: window?.id ?? 0, peer: peer, label: label)
             reviewRoute = "→ " + label
+            Log.info("Router target: peer \(peer.name) (\(peer.address)) window \(window?.id ?? 0)")
         } else {
+            Log.info("Router: verdict machine '\(context.machine)' matched no peer fingerprint — no route")
             reviewRoute = nil
         }
     }
@@ -455,14 +459,17 @@ final class DictationController: ObservableObject {
         }
         if let peer = target.peer {
             state = .processing("Sending to \(target.machine)…")
+            Log.info("Deliver: sending \(session.entry.cleaned.count) chars to \(peer.name) (\(peer.address)) window \(target.window) submit=\(submit)")
             let text = session.entry.cleaned
             let error: String? = await withCheckedContinuation { done in
                 PeerService.shared.deliver(text: text, window: target.window, submit: submit, peer: peer) { done.resume(returning: $0) }
             }
             if let error {
+                Log.error("Deliver to \(peer.name) failed: \(error)")
                 notify(title: "Could not deliver to \(target.machine)", body: error + " — pasting here instead.")
                 await deliver(entry: session.entry, slot: session.slot, config: session.config, submit: submit)
             } else {
+                Log.info("Deliver to \(peer.name): ok")
                 finish(with: .idle)
                 if let webhook = session.config.folderWebhooks[session.slot.folder], webhook.enabled {
                     let finished = session.entry
@@ -484,6 +491,7 @@ final class DictationController: ObservableObject {
                 return
             }
             try? await Task.sleep(nanoseconds: 350_000_000)   // let focus settle
+            WindowInventory.focusFrontmostTextInput()          // put the caret in the input field
             await deliver(entry: session.entry, slot: session.slot, config: session.config, submit: submit)
         }
     }
@@ -492,14 +500,21 @@ final class DictationController: ObservableObject {
     /// we know it), paste, and save a routed entry to the library.
     func receiveRoutedText(_ text: String, window: UInt32, submit: Bool, from machine: String,
                            completion: @escaping (Bool, String) -> Void) {
+        Log.info("Received routed text (\(text.count) chars) window \(window) submit=\(submit) — state \(state)")
         // Not while the local user is recording OR mid-review — pasting would
         // yank focus and the clipboard out from under them.
-        guard !state.isBusy, state != .reviewing else { completion(false, "busy dictating"); return }
+        guard !state.isBusy, state != .reviewing else {
+            Log.error("Rejected routed text: busy (\(state))")
+            completion(false, "busy dictating"); return
+        }
         Task {
-            if window != 0, !WindowInventory.activate(windowID: window) {
+            let focused = window != 0 ? WindowInventory.activate(windowID: window) : false
+            if window != 0, !focused {
                 Log.error("Routed window \(window) not found; pasting into the focused window.")
             }
             try? await Task.sleep(nanoseconds: 350_000_000)
+            let inputFocused = WindowInventory.focusFrontmostTextInput()   // caret into the input field
+            Log.info("Routed paste: window focused=\(focused) input focused=\(inputFocused)")
             let config = self.configStore.config
             let outcome = await self.paste.insert(text, autoPaste: config.autoPaste,
                                                   preferAppleScript: config.appleScriptPaste)
