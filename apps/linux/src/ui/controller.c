@@ -786,23 +786,47 @@ static gpointer router_thread(gpointer data) {
         }
         g_ptr_array_add(contexts, ctx);
     }
-    GPtrArray *machines = g_ptr_array_new_with_free_func((GDestroyNotify)vv_router_machine_free);
+    /* Flat destination list with tiny indices; 0 = leave the cursor where it
+     * is. Parse each peer's window lines ("id: App — Title") into options and
+     * keep an index → (peer fp, window id) map. */
+    GPtrArray *options = g_ptr_array_new_with_free_func(g_free);
+    GPtrArray *opt_fp = g_ptr_array_new_with_free_func(g_free);   /* char* fingerprint or "" */
+    GArray *opt_win = g_array_new(FALSE, FALSE, sizeof(guint32));
     GPtrArray *attachments = g_ptr_array_new_with_free_func((GDestroyNotify)vv_screenshot_free);
+    g_ptr_array_add(options, g_strdup_printf("leave the text where the cursor already is (%s)", t->machine_name));
+    g_ptr_array_add(opt_fp, g_strdup(""));
+    guint32 zero = 0; g_array_append_val(opt_win, zero);
     for (guint i = 0; i < contexts->len; i++) {
         VvMachineContext *ctx = g_ptr_array_index(contexts, i);
-        g_ptr_array_add(machines, vv_router_machine_new(ctx->machine, ctx->is_local, ctx->window_lines));
+        const char *fp = "";
+        if (!ctx->is_local)
+            for (guint k = 0; k < t->peers->len; k++) {
+                VvPeer *peer = g_ptr_array_index(t->peers, k);
+                if (g_strcmp0(peer->name, ctx->machine) == 0) { fp = peer->fingerprint; break; }
+            }
+        char **lines = g_strsplit(ctx->window_lines, "\n", -1);
+        for (int li = 0; lines[li]; li++) {
+            if (!*lines[li]) continue;
+            char *colon = strchr(lines[li], ':');
+            if (!colon) continue;
+            guint32 wid = (guint32)g_ascii_strtoull(lines[li], NULL, 10);
+            const char *label = colon + 1; while (*label == ' ') label++;
+            g_ptr_array_add(options, ctx->is_local ? g_strdup(label)
+                                                   : g_strdup_printf("[%s] %s", ctx->machine, label));
+            g_ptr_array_add(opt_fp, g_strdup(fp));
+            g_array_append_val(opt_win, wid);
+        }
+        g_strfreev(lines);
         for (guint k = 0; k < ctx->screens->len; k++) {
             VvScreenshot *shot = g_ptr_array_index(ctx->screens, k);
             g_ptr_array_add(attachments, vv_screenshot_new(shot->jpeg, g_strdup(shot->caption)));
         }
     }
-    char *base = vv_router_message(t->draft, t->spoken, machines);
+    char *base = vv_router_message(t->draft, t->spoken, options);
     char *key = vv_secret_get(provider->id);
-    /* The model must pick a machine + window that were offered; an invalid or
-     * hallucinated choice is bounced back with the reason, up to a few tries. */
-    char *machine = NULL; guint32 window = 0; bool valid = false;
+    int chosen = -1;
     char *correction = NULL;
-    for (int attempt = 0; attempt < 3 && !valid; attempt++) {
+    for (int attempt = 0; attempt < 3 && chosen < 0; attempt++) {
         char *user = correction ? g_strconcat(base, "\n\n", correction, NULL) : g_strdup(base);
         char *reply = NULL, *error = NULL;
         bool ok = vv_provider_chat(provider, key, vv_router_prompt(), user, attachments, &reply, &error);
@@ -810,46 +834,30 @@ static gpointer router_thread(gpointer data) {
         g_free(user);
         if (!ok) { vv_log_error("Router failed: %s", error ? error : "?"); g_free(error); g_free(reply); break; }
         g_free(error);
-        g_free(machine); machine = NULL; window = 0;
-        if (vv_router_parse(reply, &machine, &window)) {
-            /* Valid = a listed machine, and window 0 or an id present in that
-             * machine's window lines ("id: App — Title"). */
-            for (guint i = 0; i < contexts->len && !valid; i++) {
-                VvMachineContext *ctx = g_ptr_array_index(contexts, i);
-                if (g_strcmp0(ctx->machine, machine) != 0) continue;
-                if (window == 0) { valid = true; break; }
-                char **lines = g_strsplit(ctx->window_lines, "\n", -1);
-                for (int li = 0; lines[li]; li++) {
-                    if ((guint32)g_ascii_strtoull(lines[li], NULL, 10) == window
-                        && strchr(lines[li], ':')) { valid = true; break; }
-                }
-                g_strfreev(lines);
-            }
-        }
-        if (!valid) { g_free(correction); correction = vv_router_correction(reply); }
+        int target = -1;
+        if (vv_router_parse_target(reply, &target) && vv_router_target_valid(target, (int)options->len))
+            chosen = target;
+        else { g_free(correction); correction = vv_router_correction(reply, (int)options->len); }
         g_free(reply);
     }
     g_free(correction);
-    if (valid && machine) {
-        for (guint i = 0; i < contexts->len; i++) {
-            VvMachineContext *ctx = g_ptr_array_index(contexts, i);
-            if (g_strcmp0(ctx->machine, machine) != 0 || ctx->is_local) continue;
-            for (guint k = 0; k < t->peers->len; k++) {
-                VvPeer *peer = g_ptr_array_index(t->peers, k);
-                if (g_strcmp0(peer->name, ctx->machine) == 0) {
-                    t->route_peer_fp = g_strdup(peer->fingerprint);
-                    t->route_label = g_strdup(ctx->machine);
-                    t->route_window = window;
-                    t->route_display = g_strdup_printf("→ %s", ctx->machine);
-                    break;
-                }
-            }
+    if (chosen > 0) {   /* 0 = leave cursor; a peer target needs a fingerprint */
+        const char *fp = g_ptr_array_index(opt_fp, chosen);
+        guint32 wid = g_array_index(opt_win, guint32, chosen);
+        if (fp && *fp) {
+            t->route_peer_fp = g_strdup(fp);
+            t->route_window = wid;
+            const char *label = g_ptr_array_index(options, chosen);
+            t->route_label = g_strdup(label);
+            t->route_display = g_strdup_printf("→ %s", label);
         }
-    } else if (!valid) {
+        /* local target (fp == "") → Wayland can only paste into focus; no route */
+    } else if (chosen < 0) {
         vv_log_error("Router gave no valid destination after retries; using the local paste.");
     }
-    g_free(machine); g_free(key); g_free(base);
-    g_ptr_array_unref(attachments); g_ptr_array_unref(machines); g_ptr_array_unref(contexts);
+    g_free(key); g_free(base);
+    g_ptr_array_unref(attachments); g_ptr_array_unref(options); g_ptr_array_unref(opt_fp); g_array_unref(opt_win);
+    g_ptr_array_unref(contexts);
     g_idle_add(router_done, t);
     return NULL;
 }

@@ -291,40 +291,45 @@ final class DictationController: ObservableObject {
             }
         }
         guard review?.slot.id == id else { return }   // this review ended/replaced while gathering
-        let message = CleanupEngine.routerMessage(
-            draft: session.entry.cleaned, spoken: session.entry.raw,
-            machines: contexts.map { ($0.machine, $0.isLocal, $0.windowLines) })
-        let images = contexts.flatMap(\.screens)
-        let catalog = contexts.map {
-            CleanupEngine.RouterCatalog(machine: $0.machine, windowIDs: Set($0.windows.map(\.id)))
+        // Flat destination list with tiny indices; 0 = leave the cursor where
+        // it is. We keep the index → (context, window) mapping ourselves so the
+        // model never has to echo an opaque window id.
+        var options: [String] = ["leave the text where the cursor already is (\(machineName))"]
+        var targets: [(context: MachineContext, window: WindowInfo)?] = [nil]
+        for context in contexts {
+            let tag = context.isLocal ? "" : "[\(context.machine)] "
+            for window in context.windows {
+                let title = window.title.isEmpty ? "" : " — \(window.title)"
+                options.append("\(tag)\(window.app)\(title)")
+                targets.append((context, window))
+            }
         }
+        let message = CleanupEngine.routerMessage(draft: session.entry.cleaned, spoken: session.entry.raw, options: options)
+        let images = contexts.flatMap(\.screens)
         do {
             let client = ProviderClient(profile: provider)
             var correction: String?
-            // The model must pick a machine + window that were actually offered;
-            // an invalid or hallucinated choice is bounced back with the reason,
-            // up to a few tries, before we give up and paste locally.
             for _ in 0..<3 {
                 let user = correction.map { message + "\n\n" + $0 } ?? message
                 let reply: String
                 do { reply = try await client.chat(system: CleanupEngine.routerPrompt, user: user, images: images) }
                 catch { reply = try await client.chat(system: CleanupEngine.routerPrompt, user: user) }
                 guard review?.slot.id == id else { return }
-                guard let verdict = CleanupEngine.parseRouterVerdict(reply),
-                      CleanupEngine.routerVerdictValid(verdict, catalog: catalog) else {
+                guard let target = CleanupEngine.parseRouterTarget(reply),
+                      CleanupEngine.routerTargetValid(target, count: options.count) else {
                     Log.info("Router: unusable reply \(reply.prefix(120)) — retrying")
-                    correction = CleanupEngine.routerCorrection(reply)
+                    correction = CleanupEngine.routerCorrection(reply, count: options.count)
                     continue
                 }
-                Log.info("Router: machines=[\(catalog.map { $0.machine }.joined(separator: ", "))] verdict=\(verdict.machine)/win\(verdict.window)")
-                apply(verdict: verdict, contexts: contexts, sessionID: id, machineName: machineName)
+                Log.info("Router: \(options.count) options, target \(target) → \(options[target])")
+                apply(target: targets[target], sessionID: id, machineName: machineName)
                 return
             }
             Log.error("Router gave no valid destination after retries; using the local paste.")
-            clearRoute(id)
+            clearRoute(id); clearRouteDetail()
         } catch {
             Log.error("Router failed: \(error.localizedDescription)")
-            clearRoute(id)
+            clearRoute(id); clearRouteDetail()
         }
     }
 
@@ -367,35 +372,27 @@ final class DictationController: ObservableObject {
     /// Whether the HUD has fields the user can cycle (drives the Tab handler).
     var canCycleRouteField: Bool { routeFields.count > 1 }
 
-    private func apply(verdict: CleanupEngine.RouterVerdict, contexts: [MachineContext],
+    private func apply(target: (context: MachineContext, window: WindowInfo)?,
                        sessionID: String, machineName: String) {
         guard review?.slot.id == sessionID else { return }
-        guard let context = contexts.first(where: { $0.machine == verdict.machine }) else {
-            reviewRoute = nil; return
+        // Target 0 (nil) = leave the cursor where it is: a normal local paste.
+        guard let (context, window) = target else {
+            review?.routeTarget = nil; reviewRoute = nil; clearRouteDetail(); return
         }
-        let window = context.windows.first(where: { $0.id == verdict.window })
-        let windowLabel = window.map { $0.title.isEmpty ? $0.app : "\($0.app) — \($0.title)" }
+        let windowLabel = window.title.isEmpty ? window.app : "\(window.app) — \(window.title)"
         if context.isLocal {
-            if let window, let windowLabel {
-                review?.routeTarget = RouteTarget(machine: machineName, window: window.id,
-                                                  peer: nil, label: windowLabel)
-                reviewRoute = "→ " + windowLabel
-                fetchRouteDetail(window: window.id, peer: nil)
-            } else {
-                review?.routeTarget = nil
-                reviewRoute = nil     // focused window — the normal paste
-                clearRouteDetail()
-            }
+            review?.routeTarget = RouteTarget(machine: machineName, window: window.id, peer: nil, label: windowLabel)
+            reviewRoute = "→ " + windowLabel
+            fetchRouteDetail(window: window.id, peer: nil)
         } else if let peer = review?.config.multiMachine.peers.first(where: { $0.fingerprint == context.fingerprint }) {
-            let label = (windowLabel.map { "\($0) on " } ?? "") + context.machine
-            review?.routeTarget = RouteTarget(machine: context.machine,
-                                              window: window?.id ?? 0, peer: peer, label: label)
+            let label = windowLabel + " on " + context.machine
+            review?.routeTarget = RouteTarget(machine: context.machine, window: window.id, peer: peer, label: label)
             reviewRoute = "→ " + label
-            Log.info("Router target: peer \(peer.name) (\(peer.address)) window \(window?.id ?? 0)")
-            if let wid = window?.id { fetchRouteDetail(window: wid, peer: peer) } else { clearRouteDetail() }
+            Log.info("Router target: peer \(peer.name) (\(peer.address)) window \(window.id)")
+            fetchRouteDetail(window: window.id, peer: peer)
         } else {
-            Log.info("Router: verdict machine '\(context.machine)' matched no peer fingerprint — no route")
-            reviewRoute = nil
+            Log.info("Router: matched no peer fingerprint — no route")
+            reviewRoute = nil; clearRouteDetail()
         }
     }
 

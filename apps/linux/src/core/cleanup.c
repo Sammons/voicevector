@@ -27,42 +27,28 @@ const char *vv_router_prompt(void) {
     return router;
 }
 
-VvRouterMachine *vv_router_machine_new(const char *name, bool current, const char *windows) {
-    VvRouterMachine *m = g_new0(VvRouterMachine, 1);
-    m->name = g_strdup(name); m->current = current; m->windows = g_strdup(windows ? windows : "");
-    return m;
-}
-
-void vv_router_machine_free(VvRouterMachine *m) {
-    if (!m) return;
-    g_free(m->name); g_free(m->windows); g_free(m);
-}
-
-char *vv_router_message(const char *draft, const char *spoken, GPtrArray *machines) {
+char *vv_router_message(const char *draft, const char *spoken, GPtrArray *options) {
     GString *s = g_string_new(NULL);
     char *trimmed = spoken ? g_strstrip(g_strdup(spoken)) : NULL;
     if (trimmed && *trimmed) g_string_append_printf(s, "<spoken-request>\n%s\n</spoken-request>\n", trimmed);
     g_free(trimmed);
-    g_string_append_printf(s, "<text>\n%s\n</text>", draft);
-    for (guint i = 0; machines && i < machines->len; i++) {
-        VvRouterMachine *m = g_ptr_array_index(machines, i);
-        g_string_append_printf(s, "\nMachine \"%s\"%s windows:\n%s", m->name,
-                               m->current ? " (current: the user dictated here)" : "",
-                               *m->windows ? m->windows : "(none listed — window 0 only)");
-    }
+    g_string_append_printf(s, "<text>\n%s\n</text>\nDestinations:", draft);
+    for (guint i = 0; options && i < options->len; i++)
+        g_string_append_printf(s, "\n%u: %s", i, (char *)g_ptr_array_index(options, i));
     return g_string_free(s, FALSE);
 }
 
-char *vv_router_correction(const char *reply) {
+char *vv_router_correction(const char *reply, int count) {
     return g_strdup_printf(
-        "Your previous answer was not usable:\n%s\nAnswer again with ONLY the JSON object "
-        "{\"machine\": \"<one of the machine names listed above, spelled exactly>\", "
-        "\"window\": <one of that machine's listed window id numbers, or 0 for the current focus>}. "
-        "Do not invent a machine name or window id that is not in the lists.", reply ? reply : "");
+        "Your previous answer was not usable:\n%s\nReply again with ONLY {\"target\": <number>} where the "
+        "number is 0 (leave the cursor where it is) or one of the destination numbers listed above (0 to %d). "
+        "Do not invent a number that is not listed.", reply ? reply : "", count - 1);
 }
 
-bool vv_router_parse(const char *reply, char **machine_out, guint32 *window_out) {
-    *machine_out = NULL; *window_out = 0;
+bool vv_router_target_valid(int target, int count) { return target >= 0 && target < count; }
+
+bool vv_router_parse_target(const char *reply, int *target_out) {
+    *target_out = -1;
     if (!reply) return false;
     const char *start = strchr(reply, '{');
     const char *end = strrchr(reply, '}');
@@ -71,12 +57,11 @@ bool vv_router_parse(const char *reply, char **machine_out, guint32 *window_out)
     VvJson *obj = vv_json_parse(json, NULL);
     g_free(json);
     if (!obj || obj->type != VV_JSON_OBJECT) { vv_json_free(obj); return false; }
-    const char *machine = vv_json_get_string(obj, "machine", NULL);
-    if (!machine) { vv_json_free(obj); return false; }
-    *machine_out = g_strdup(machine);
-    *window_out = (guint32)vv_json_get_number(obj, "window", 0);
+    bool found = false;
+    if (vv_json_object_get(obj, "target")) { *target_out = (int)vv_json_get_number(obj, "target", 0); found = true; }
+    else if (vv_json_object_get(obj, "window")) { *target_out = (int)vv_json_get_number(obj, "window", 0); found = true; }
     vv_json_free(obj);
-    return true;
+    return found;
 }
 
 const char *vv_screenshot_note(void) {

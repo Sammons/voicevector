@@ -358,27 +358,18 @@ namespace VoiceVector.SelfTest
             Expect(PeerCrypto.ParseFrame(new List<byte> { 0xFF, 0xFF, 0xFF, 0xFF }, out bad) == null && bad == -1,
                    "peer: oversized frame rejected");
             Expect(PeerCrypto.ToHex(PeerCrypto.FromHex("ab01")) == "ab01", "peer: hex round trip");
-            var verdict = CleanupEngine.ParseRouterVerdict("Sure: {\"machine\": \"win\", \"window\": 42}");
-            Expect(verdict != null && verdict.Machine == "win" && verdict.Window == 42,
-                   "router: verdict parsed out of prose");
-            var bare2 = CleanupEngine.ParseRouterVerdict("{\"machine\":\"m\"}");
-            Expect(bare2 != null && bare2.Window == 0, "router: missing window is 0");
-            Expect(CleanupEngine.ParseRouterVerdict("no json here") == null, "router: garbage is null");
-            var routerMsg = CleanupEngine.RouterMessage("hi", "Hey Slack, hi",
-                new List<Tuple<string, bool, string>> { Tuple.Create("win", true, "1: A — B") });
+var routerMsg = CleanupEngine.RouterMessage("hi", "Hey Slack, hi",
+                new List<string> { "leave it", "Slack — #general" });
             Expect(routerMsg.Contains("<text>\nhi\n</text>")
                    && routerMsg.Contains("<spoken-request>\nHey Slack, hi\n</spoken-request>")
-                   && routerMsg.Contains("(current: the user dictated here)"),
-                   "router: message carries spoken request and text");
-            var catalog = new Dictionary<string, HashSet<uint>> { { "win", new HashSet<uint> { 1, 2 } } };
-            Expect(CleanupEngine.RouterVerdictValid(new CleanupEngine.RouterVerdict { Machine = "win", Window = 1 }, catalog),
-                   "router: listed window is valid");
-            Expect(CleanupEngine.RouterVerdictValid(new CleanupEngine.RouterVerdict { Machine = "win", Window = 0 }, catalog),
-                   "router: window 0 (focus) is valid");
-            Expect(!CleanupEngine.RouterVerdictValid(new CleanupEngine.RouterVerdict { Machine = "win", Window = 99 }, catalog),
-                   "router: unlisted window id is rejected");
-            Expect(!CleanupEngine.RouterVerdictValid(new CleanupEngine.RouterVerdict { Machine = "ghost", Window = 1 }, catalog),
-                   "router: unknown machine is rejected");
+                   && routerMsg.Contains("0: leave it") && routerMsg.Contains("1: Slack — #general"),
+                   "router: message is a numbered destination list");
+            Expect(CleanupEngine.ParseRouterTarget("Sure: {\"target\": 3}") == 3, "router: target parsed");
+            Expect(CleanupEngine.ParseRouterTarget("{\"window\": 2}") == 2, "router: tolerates window key");
+            Expect(CleanupEngine.ParseRouterTarget("nope") == null, "router: garbage is null");
+            Expect(CleanupEngine.RouterTargetValid(0, 3) && CleanupEngine.RouterTargetValid(2, 3)
+                   && !CleanupEngine.RouterTargetValid(3, 3) && !CleanupEngine.RouterTargetValid(-1, 3),
+                   "router: target range validated");
             var mmJson = Json.ParseObject("{\"peers\":[{\"name\":\"x\",\"fingerprint\":\"ab\"}]}");
             var mm = MultiMachineConfig.FromJson(mmJson);
             Expect(!mm.Enabled && mm.Port == 47800 && mm.Peers.Count == 1

@@ -394,22 +394,22 @@ static void test_cleanup(void) {
         char *hx = vv_peer_hex(g_bytes_get_data(un, NULL), g_bytes_get_size(un));
         expect(streq(hx, "ab01"), "peer: hex round trip");
         g_free(hx); g_bytes_unref(un);
-        char *machine = NULL; guint32 window = 7;
-        expect(vv_router_parse("Sure: {\"machine\": \"tux\", \"window\": 42}", &machine, &window)
-               && streq(machine, "tux") && window == 42, "router: verdict parsed out of prose");
-        g_free(machine);
-        expect(vv_router_parse("{\"machine\":\"m\"}", &machine, &window) && window == 0,
-               "router: missing window is 0");
-        g_free(machine);
-        expect(!vv_router_parse("no json here", &machine, &window), "router: garbage is false");
-        GPtrArray *ms = g_ptr_array_new_with_free_func((GDestroyNotify)vv_router_machine_free);
-        g_ptr_array_add(ms, vv_router_machine_new("tux", true, "1: A — B"));
-        char *rm2 = vv_router_message("hi", "Hey Slack, hi", ms);
+        int target = 7;
+        expect(vv_router_parse_target("Sure: {\"target\": 3}", &target) && target == 3,
+               "router: target parsed out of prose");
+        expect(vv_router_parse_target("{\"window\": 2}", &target) && target == 2, "router: tolerates window key");
+        expect(!vv_router_parse_target("no json here", &target), "router: garbage is false");
+        expect(vv_router_target_valid(0, 3) && vv_router_target_valid(2, 3)
+               && !vv_router_target_valid(3, 3) && !vv_router_target_valid(-1, 3), "router: target range");
+        GPtrArray *opts = g_ptr_array_new_with_free_func(g_free);
+        g_ptr_array_add(opts, g_strdup("leave it"));
+        g_ptr_array_add(opts, g_strdup("Slack — #general"));
+        char *rm2 = vv_router_message("hi", "Hey Slack, hi", opts);
         expect(strstr(rm2, "<text>\nhi\n</text>") && strstr(rm2, "<spoken-request>\nHey Slack, hi\n</spoken-request>")
-               && strstr(rm2, "(current: the user dictated here)"),
-               "router: message carries spoken request and text");
-        g_free(rm2); g_ptr_array_unref(ms);
-        char *corr = vv_router_correction("bogus");
+               && strstr(rm2, "0: leave it") && strstr(rm2, "1: Slack — #general"),
+               "router: message is a numbered destination list");
+        g_free(rm2); g_ptr_array_unref(opts);
+        char *corr = vv_router_correction("bogus", 3);
         expect(strstr(corr, "was not usable") && strstr(corr, "bogus") && strstr(corr, "Do not invent"),
                "router: correction steers back");
         g_free(corr);

@@ -275,27 +275,20 @@ enum SelfTest {
         } else {
             expect(false, "peer: self-signed certificate creation")
         }
-        expect(CleanupEngine.parseRouterVerdict("Sure: {\"machine\": \"mac\", \"window\": 42}")
-               == CleanupEngine.RouterVerdict(machine: "mac", window: 42),
-               "router: verdict parsed out of prose")
-        expect(CleanupEngine.parseRouterVerdict("{\"machine\":\"m\"}")
-               == CleanupEngine.RouterVerdict(machine: "m", window: 0), "router: missing window is 0")
-        expect(CleanupEngine.parseRouterVerdict("no json here") == nil, "router: garbage is nil")
+        expect(CleanupEngine.parseRouterTarget("Sure: {\"target\": 3}") == 3,
+               "router: target parsed out of prose")
+        expect(CleanupEngine.parseRouterTarget("{\"window\": 2}") == 2, "router: tolerates 'window' key")
+        expect(CleanupEngine.parseRouterTarget("no json here") == nil, "router: garbage is nil")
+        expect(CleanupEngine.routerTargetValid(0, count: 3) && CleanupEngine.routerTargetValid(2, count: 3),
+               "router: in-range targets are valid")
+        expect(!CleanupEngine.routerTargetValid(3, count: 3) && !CleanupEngine.routerTargetValid(-1, count: 3),
+               "router: out-of-range targets rejected")
         let routerMsg = CleanupEngine.routerMessage(draft: "hi", spoken: "Hey Slack, hi",
-                                                   machines: [("mac", true, "1: A — B")])
+                                                    options: ["leave it", "Slack — #general"])
         expect(routerMsg.contains("<text>\nhi\n</text>")
                && routerMsg.contains("<spoken-request>\nHey Slack, hi\n</spoken-request>")
-               && routerMsg.contains("(current: the user dictated here)"),
-               "router: message carries spoken request and text")
-        let catalog = [CleanupEngine.RouterCatalog(machine: "mac", windowIDs: [1, 2])]
-        expect(CleanupEngine.routerVerdictValid(.init(machine: "mac", window: 1), catalog: catalog),
-               "router: listed window is valid")
-        expect(CleanupEngine.routerVerdictValid(.init(machine: "mac", window: 0), catalog: catalog),
-               "router: window 0 (focus) is valid")
-        expect(!CleanupEngine.routerVerdictValid(.init(machine: "mac", window: 99), catalog: catalog),
-               "router: unlisted window id is rejected")
-        expect(!CleanupEngine.routerVerdictValid(.init(machine: "ghost", window: 1), catalog: catalog),
-               "router: unknown machine is rejected")
+               && routerMsg.contains("0: leave it") && routerMsg.contains("1: Slack — #general"),
+               "router: message is a numbered destination list")
         if let mmData = "{\"peers\":[{\"name\":\"x\",\"fingerprint\":\"ab\"}]}".data(using: .utf8),
            let mm = try? JSONDecoder().decode(MultiMachineConfig.self, from: mmData) {
             expect(mm.enabled == false && mm.port == 47800 && mm.peers.first?.allowDeliver == false

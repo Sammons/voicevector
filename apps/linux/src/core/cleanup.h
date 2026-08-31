@@ -34,16 +34,14 @@ void vv_screenshot_set_unref(VvScreenshotSet *s);
 GPtrArray *vv_screenshot_set_attachments(const VvScreenshotSet *s);
 
 /* AI routing (docs/multi-machine.md). */
-typedef struct { char *name; bool current; char *windows; } VvRouterMachine;
-VvRouterMachine *vv_router_machine_new(const char *name, bool current, const char *windows);
-void vv_router_machine_free(VvRouterMachine *m);
-/* The router's user message: the draft plus each machine's window list. */
-char *vv_router_message(const char *draft, const char *spoken, GPtrArray *machines /* VvRouterMachine* */);
-/* Extracts {machine, window} from a router reply; false when unparseable. */
-bool vv_router_parse(const char *reply, char **machine_out, guint32 *window_out);
-/* Corrective steer appended when the router's last answer was unparseable or
- * named a machine/window that was not offered (caller frees). */
-char *vv_router_correction(const char *reply);
+/* The router's user message: the draft, the spoken request, and a single
+ * numbered destination list (options[0] = current focus, then 1…N). */
+char *vv_router_message(const char *draft, const char *spoken, GPtrArray *options /* char* */);
+/* Extracts {"target": N} from a router reply; false when unparseable (sets *out). */
+bool vv_router_parse_target(const char *reply, int *target_out);
+bool vv_router_target_valid(int target, int count);
+/* Corrective steer when the last answer was unparseable or out of range. */
+char *vv_router_correction(const char *reply, int count);
 
 GPtrArray *vv_parse_vocabulary(const char *raw);                 /* char* */
 char *vv_merge_vocabulary(const char *global, const char *extra);

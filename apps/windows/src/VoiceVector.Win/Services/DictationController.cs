@@ -305,19 +305,26 @@ namespace VoiceVector.Win.Services
                 }
             }
             if (_review != session) return;   // review ended while gathering
-            var message = CleanupEngine.RouterMessage(draft, session.Entry.Raw,
-                contexts.Select(c => Tuple.Create(c.Machine, c.IsLocal, c.WindowLines)).ToList());
+            // Flat destination list with tiny indices; 0 = leave the cursor
+            // where it is. We keep the index → (context, window) map ourselves.
+            var options = new List<string> { "leave the text where the cursor already is (" + machineName + ")" };
+            var targets = new List<Tuple<MachineContext, WindowInfo>> { null };
+            foreach (var c in contexts)
+            {
+                var tag = c.IsLocal ? "" : "[" + c.Machine + "] ";
+                foreach (var w in c.Windows)
+                {
+                    options.Add(tag + w.App + (w.Title.Length == 0 ? "" : " — " + w.Title));
+                    targets.Add(Tuple.Create(c, w));
+                }
+            }
+            var message = CleanupEngine.RouterMessage(draft, session.Entry.Raw, options);
             var images = contexts.SelectMany(c => c.Screens).ToList();
-            var catalog = contexts.ToDictionary(c => c.Machine,
-                c => new HashSet<uint>(c.Windows.Select(w => w.Id)));
             try
             {
                 var client = new ProviderClient(provider, KeyStore.GetApiKey(provider.Id));
                 string correction = null;
-                CleanupEngine.RouterVerdict valid = null;
-                // The model must pick a machine + window that were offered; an
-                // invalid or hallucinated choice is bounced back with the reason,
-                // up to a few tries, before we give up and paste locally.
+                int chosen = -1;
                 for (int attempt = 0; attempt < 3; attempt++)
                 {
                     var user = correction == null ? message : message + "\n\n" + correction;
@@ -325,16 +332,16 @@ namespace VoiceVector.Win.Services
                     try { reply = await client.ChatAsync(CleanupEngine.RouterPrompt, user, images).ConfigureAwait(false); }
                     catch { reply = await client.ChatAsync(CleanupEngine.RouterPrompt, user).ConfigureAwait(false); }
                     if (_review != session) return;
-                    var v = CleanupEngine.ParseRouterVerdict(reply);
-                    if (v != null && CleanupEngine.RouterVerdictValid(v, catalog)) { valid = v; break; }
-                    correction = CleanupEngine.RouterCorrection(reply);
+                    var t = CleanupEngine.ParseRouterTarget(reply);
+                    if (t.HasValue && CleanupEngine.RouterTargetValid(t.Value, options.Count)) { chosen = t.Value; break; }
+                    correction = CleanupEngine.RouterCorrection(reply, options.Count);
                 }
-                if (valid == null)
+                if (chosen < 0)
                     Log.Error("Router gave no valid destination after retries; using the local paste.");
-                var verdict = valid;
+                var target = chosen >= 0 ? targets[chosen] : null;
                 // Apply on the UI thread so it can't interleave with AcceptReview.
                 _dispatcher.Invoke((Action)(() => {
-                    if (_review == session) ApplyVerdict(verdict, contexts, machineName, session);
+                    if (_review == session) ApplyVerdict(target, machineName, session);
                 }));
             }
             catch (Exception e)
@@ -345,31 +352,25 @@ namespace VoiceVector.Win.Services
             if (_review == session) SetState(StateKind.Reviewing, "");
         }
 
-        private void ApplyVerdict(CleanupEngine.RouterVerdict verdict, List<MachineContext> contexts,
-                                  string machineName, ReviewSession session)
+        private void ApplyVerdict(Tuple<MachineContext, WindowInfo> target, string machineName, ReviewSession session)
         {
             ReviewRoute = null;
             session.Route = null;
-            if (verdict == null) return;
-            var context = contexts.FirstOrDefault(c => c.Machine == verdict.Machine);
-            if (context == null) return;
-            var window = context.Windows.FirstOrDefault(w => w.Id == verdict.Window);
-            var windowLabel = window == null ? null
-                : (window.Title.Length == 0 ? window.App : window.App + " — " + window.Title);
+            if (target == null) return;   // 0 = leave the cursor where it is
+            var context = target.Item1;
+            var window = target.Item2;
+            var windowLabel = window.Title.Length == 0 ? window.App : window.App + " — " + window.Title;
             if (context.IsLocal)
             {
-                if (window == null) return;   // focused window — the normal paste
                 session.Route = new RouteTarget { Machine = machineName, Window = window.Id, Label = windowLabel };
                 ReviewRoute = "→ " + windowLabel;
             }
             else
             {
-                // Resolve the peer by pinned fingerprint, not display name.
                 var peer = session.Config.MultiMachine.Peers.FirstOrDefault(p => p.Fingerprint == context.Fingerprint);
                 if (peer == null) return;
-                var label = (windowLabel != null ? windowLabel + " on " : "") + context.Machine;
-                session.Route = new RouteTarget
-                    { Machine = context.Machine, Window = window != null ? window.Id : 0, Peer = peer, Label = label };
+                var label = windowLabel + " on " + context.Machine;
+                session.Route = new RouteTarget { Machine = context.Machine, Window = window.Id, Peer = peer, Label = label };
                 ReviewRoute = "→ " + label;
             }
         }

@@ -6,6 +6,12 @@ all three apps share one version number.
 
 ## Unreleased
 
+- **Router picks a numbered destination, not an opaque window id.** The router
+  model now gets one flat, numbered list of destinations (0 = leave the cursor
+  where it is) and replies with a single small number, which the app maps back
+  to the real machine + window. Previously it had to echo a 5-digit window id
+  verbatim, which small models frequently got wrong — so routing failed and
+  fell back to a local paste more often than it should. Much more reliable.
 - **See where routed text is going, and pick the field.** When the router
   targets a window, the staging card now shows a thumbnail of that window with
   the destination input field highlighted; press ⇥ (⇧⇥ to go back) to cycle
