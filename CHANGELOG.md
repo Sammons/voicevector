@@ -6,6 +6,12 @@ all three apps share one version number.
 
 ## Unreleased
 
+- **Auto-submit (press Enter after pasting)** — a per-hotkey option, off by
+  default. After the text is pasted the app presses Enter, so a dictated chat
+  message or terminal command is sent without touching the keyboard. It also
+  travels with a routed delivery: the *receiving* machine presses Enter, which
+  is the point for the cross-machine case where no one is at that keyboard.
+  Leave it off for editors, where Enter just inserts a line.
 - **Speak the destination.** When you open a router dictation by naming where
   it should go — "Hey Slack, …", "Send this to the terminal —", "Tell Ben
   that …" — the router now honours that spoken destination (it's given your

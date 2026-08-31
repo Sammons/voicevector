@@ -130,9 +130,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.state.config.multiMachine.peers.append(peer)
             }
         }
-        service.onDeliver = { [weak self] text, window, done in
+        service.onDeliver = { [weak self] text, window, submit, done in
             guard let self else { done(false, "not ready"); return }
-            self.state.dictation.receiveRoutedText(text, window: window, from: "a paired machine", completion: done)
+            self.state.dictation.receiveRoutedText(text, window: window, submit: submit,
+                                                   from: "a paired machine", completion: done)
         }
         service.onIncomingPair = { [weak self] name, code, answer in
             guard let self else { answer(false); return }

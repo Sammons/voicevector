@@ -133,11 +133,14 @@ struct DictationProfile: Codable, Equatable, Identifiable {
     var routerEnabled: Bool = false
     /// nil = use the review provider for routing.
     var routerProviderID: UUID?
+    /// Press Enter after pasting (auto-submit) — for chat boxes, terminals,
+    /// and routed delivery where no one is at the destination keyboard.
+    var autoSubmit: Bool = false
 
     enum CodingKeys: String, CodingKey {
         case id, name, hotkey, cleanupEnabled, cleanupMode, cleanupProviderID, customPrompt
         case sttProviderID, vocabulary, reviewBeforePaste, reviewProviderID, screenshotContext
-        case routerEnabled, routerProviderID
+        case routerEnabled, routerProviderID, autoSubmit
     }
 
     init() {}
@@ -165,6 +168,7 @@ struct DictationProfile: Codable, Equatable, Identifiable {
         screenshotContext = try c.decodeIfPresent(Bool.self, forKey: .screenshotContext) ?? false
         routerEnabled = try c.decodeIfPresent(Bool.self, forKey: .routerEnabled) ?? false
         routerProviderID = try c.decodeIfPresent(UUID.self, forKey: .routerProviderID)
+        autoSubmit = try c.decodeIfPresent(Bool.self, forKey: .autoSubmit) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -183,6 +187,7 @@ struct DictationProfile: Codable, Equatable, Identifiable {
         try c.encode(screenshotContext, forKey: .screenshotContext)
         try c.encode(routerEnabled, forKey: .routerEnabled)
         try c.encodeIfPresent(routerProviderID, forKey: .routerProviderID)
+        try c.encode(autoSubmit, forKey: .autoSubmit)
     }
 }
 

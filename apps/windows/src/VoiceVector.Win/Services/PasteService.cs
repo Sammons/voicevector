@@ -27,6 +27,16 @@ namespace VoiceVector.Win.Services
         /// <summary>Puts text on the clipboard without pasting.</summary>
         public static void CopyOnly(string text) { WritePlainText((text ?? "").TrimEnd('\r', '\n'), false); }
 
+        /// <summary>Presses Enter in the foreground app (auto-submit after paste).</summary>
+        public static async Task PressEnterAsync()
+        {
+            await WaitForModifierReleaseAsync().ConfigureAwait(false);
+            var inputs = new Native.INPUT[2];
+            inputs[0] = Key(Native.VK_RETURN, true);
+            inputs[1] = Key(Native.VK_RETURN, false);
+            Native.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(Native.INPUT)));
+        }
+
         public static async Task<Outcome> InsertAsync(string text, bool autoPaste)
         {
             text = text.TrimEnd('\r', '\n'); // trailing newline auto-submits in terminals

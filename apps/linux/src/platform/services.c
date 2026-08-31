@@ -154,6 +154,12 @@ VvPasteOutcome vv_paste_insert(const char *text, bool auto_paste, char **reason)
     return VV_PASTE_PASTED;
 }
 
+bool vv_paste_press_enter(void) {
+    if (!rd_session) { char *e = NULL; if (!remote_desktop_session(&e)) { g_free(e); return false; } }
+    sleep_ms(40);
+    return notify_key(KEY_ENTER, true) && notify_key(KEY_ENTER, false);
+}
+
 /* -------------------------------------------------------- secrets */
 
 static const SecretSchema *schema(void) {

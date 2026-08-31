@@ -158,6 +158,7 @@ VvJson *vv_profile_to_json(const VvProfile *p) {
     vv_json_object_set(o, "screenshotContext", vv_json_bool(p->screenshot_context));
     vv_json_object_set(o, "routerEnabled", vv_json_bool(p->router_enabled));
     vv_json_object_set(o, "routerProviderID", vv_json_string(p->router_provider_id));
+    vv_json_object_set(o, "autoSubmit", vv_json_bool(p->auto_submit));
     return o;
 }
 
@@ -183,6 +184,7 @@ VvProfile *vv_profile_from_json(const VvJson *j) {
     p->router_enabled = vv_json_get_bool(j, "routerEnabled", false);
     const char *rt = vv_json_get_string(j, "routerProviderID", NULL);
     if (valid_uuid(rt)) p->router_provider_id = g_ascii_strdown(rt, -1);
+    p->auto_submit = vv_json_get_bool(j, "autoSubmit", false);
     return p;
 }
 

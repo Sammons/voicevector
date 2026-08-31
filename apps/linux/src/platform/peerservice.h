@@ -21,7 +21,7 @@ void vv_machine_context_free(VvMachineContext *ctx);
 
 /* Inbound delivery: paste text (window id is best-effort; 0 = focus) and call
  * done(ok, error) when finished. Invoked on the main loop. */
-typedef void (*VvPeerDeliverFn)(const char *text, guint32 window,
+typedef void (*VvPeerDeliverFn)(const char *text, guint32 window, bool submit,
                                 void (*done)(bool ok, const char *error, gpointer token),
                                 gpointer token, gpointer user);
 /* Inbound pairing: show the code; call answer(accepted). On the main loop. */
@@ -48,7 +48,7 @@ void vv_peer_service_pair_async(const char *address, VvPeerCodeFn on_code,
 /* Blocking; call from a worker thread. NULL on failure. */
 VvMachineContext *vv_peer_service_fetch_context(const VvPeer *peer);
 /* Blocking; NULL on success, else an error message (g_free). */
-char *vv_peer_service_deliver(const VvPeer *peer, const char *text, guint32 window);
+char *vv_peer_service_deliver(const VvPeer *peer, const char *text, guint32 window, bool submit);
 
 /* This machine's context for the router (main thread — takes screenshots). */
 VvMachineContext *vv_peer_service_local_context(const char *machine_name,

@@ -180,6 +180,9 @@ namespace VoiceVector.Shared
         public bool RouterEnabled = false;
         /// <summary>null = use the review provider for routing.</summary>
         public Guid? RouterProviderId;
+        /// <summary>Press Enter after pasting (auto-submit) — chat boxes,
+        /// terminals, and routed delivery with no one at the keyboard.</summary>
+        public bool AutoSubmit = false;
 
         public Dictionary<string, object> ToJson()
         {
@@ -210,6 +213,7 @@ namespace VoiceVector.Shared
                 { "routerEnabled", RouterEnabled },
                 { "routerProviderID", RouterProviderId.HasValue
                     ? RouterProviderId.Value.ToString("D") : (object)null },
+                { "autoSubmit", AutoSubmit },
             };
         }
 
@@ -243,6 +247,7 @@ namespace VoiceVector.Shared
             profile.RouterEnabled = Json.Bool(d, "routerEnabled", false);
             Guid rt;
             if (Guid.TryParse(Json.Str(d, "routerProviderID"), out rt)) profile.RouterProviderId = rt;
+            profile.AutoSubmit = Json.Bool(d, "autoSubmit", false);
             return profile;
         }
     }

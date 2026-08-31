@@ -304,6 +304,15 @@ enum SelfTest {
             expect(false, "peer: tolerant config decoding")
         }
 
+        if let asData = "{\"autoSubmit\":true,\"routerEnabled\":true}".data(using: .utf8),
+           let ap = try? JSONDecoder().decode(DictationProfile.self, from: asData) {
+            expect(ap.autoSubmit && ap.routerEnabled, "profile: autoSubmit decodes")
+            if let round = try? JSONEncoder().encode(ap),
+               let ap2 = try? JSONDecoder().decode(DictationProfile.self, from: round) {
+                expect(ap2.autoSubmit, "profile: autoSubmit round trips")
+            } else { expect(false, "profile: autoSubmit round trips") }
+        } else { expect(false, "profile: autoSubmit decodes") }
+
         expect(!HotkeySpec.unset.isSet && HotkeySpec.default.isSet
                && HotkeySpec(keyCode: 0, modifiers: CGEventFlags.maskCommand.rawValue, isModifierOnly: false).isSet,
                "hotkey: unset placeholder is never a binding (key code 0 is the letter A)")

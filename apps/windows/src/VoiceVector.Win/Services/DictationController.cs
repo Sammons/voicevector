@@ -490,22 +490,23 @@ namespace VoiceVector.Win.Services
 
         private async Task DeliverRoutedAsync(ReviewSession session)
         {
+            var submit = session.Profile != null && session.Profile.AutoSubmit;
             var target = session.Route;
             if (target == null)
             {
-                await DeliverAsync(session.Entry, session.AudioPath, session.Folder, session.Config)
+                await DeliverAsync(session.Entry, session.AudioPath, session.Folder, session.Config, submit)
                     .ConfigureAwait(false);
                 return;
             }
             if (target.Peer != null)
             {
                 SetState(StateKind.Processing, "Sending to " + target.Machine + "…");
-                var error = await PeerService.Shared.DeliverAsync(session.Entry.Cleaned, target.Window, target.Peer)
+                var error = await PeerService.Shared.DeliverAsync(session.Entry.Cleaned, target.Window, submit, target.Peer)
                     .ConfigureAwait(false);
                 if (error != null)
                 {
                     RaiseNotice("Could not deliver to " + target.Machine + ": " + error + " — pasting here.");
-                    await DeliverAsync(session.Entry, session.AudioPath, session.Folder, session.Config)
+                    await DeliverAsync(session.Entry, session.AudioPath, session.Folder, session.Config, submit)
                         .ConfigureAwait(false);
                     return;
                 }
@@ -531,22 +532,22 @@ namespace VoiceVector.Win.Services
                     return;
                 }
                 await Task.Delay(350).ConfigureAwait(false);
-                await DeliverAsync(session.Entry, session.AudioPath, session.Folder, session.Config)
+                await DeliverAsync(session.Entry, session.AudioPath, session.Folder, session.Config, submit)
                     .ConfigureAwait(false);
             }
         }
 
         /// <summary>Inbound routed text from a paired machine: activate the
         /// window (when known), paste, save a routed entry.</summary>
-        public void ReceiveRoutedText(string text, uint window, string machine,
+        public void ReceiveRoutedText(string text, uint window, bool submit, string machine,
                                       Action<bool, string> done)
         {
             // Not while recording OR mid-review — a paste would steal focus.
             if (IsBusy || State == StateKind.Reviewing) { done(false, "busy dictating"); return; }
-            var _ = ReceiveRoutedAsync(text, window, machine, done);
+            var _ = ReceiveRoutedAsync(text, window, submit, machine, done);
         }
 
-        private async Task ReceiveRoutedAsync(string text, uint window, string machine,
+        private async Task ReceiveRoutedAsync(string text, uint window, bool submit, string machine,
                                               Action<bool, string> done)
         {
             try
@@ -557,6 +558,8 @@ namespace VoiceVector.Win.Services
                 var config = _config();
                 var library = _library();
                 var outcome = await PasteService.InsertAsync(text, config.AutoPaste).ConfigureAwait(false);
+                if (outcome == PasteService.Outcome.Pasted && submit)
+                    await PasteService.PressEnterAsync().ConfigureAwait(false);
                 var slot = library.NewEntrySlot(config.ActiveFolder);
                 var entry = new Entry
                 {
@@ -790,11 +793,13 @@ namespace VoiceVector.Win.Services
                 BeginReview(entry, audioPath, folder, config, dictationProfile, policy);
                 return;
             }
-            await DeliverAsync(entry, audioPath, folder, config).ConfigureAwait(false);
+            await DeliverAsync(entry, audioPath, folder, config,
+                               dictationProfile != null && dictationProfile.AutoSubmit).ConfigureAwait(false);
         }
 
         /// <summary>3. Paste into the foreground app, then 4. webhook (fire and forget).</summary>
-        private async Task DeliverAsync(Entry entry, string audioPath, string folder, AppConfig config)
+        private async Task DeliverAsync(Entry entry, string audioPath, string folder, AppConfig config,
+                                        bool submit = false)
         {
             SetState(StateKind.Processing, "Pasting…");
             Diag.Breadcrumb("state Processing Pasting…");
@@ -802,6 +807,8 @@ namespace VoiceVector.Win.Services
                 .ConfigureAwait(false);
             if (outcome == PasteService.Outcome.CopiedOnly)
                 RaiseNotice("Transcript copied — press Ctrl+V to insert it.");
+            else if (submit)
+                await PasteService.PressEnterAsync().ConfigureAwait(false);
             SetState(StateKind.Idle, "");
 
             WebhookConfig webhook;

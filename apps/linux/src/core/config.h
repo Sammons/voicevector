@@ -60,6 +60,7 @@ typedef struct {
     bool screenshot_context;
     bool router_enabled;           /* AI routing; needs review_before_paste */
     char *router_provider_id;      /* NULL = review provider */
+    bool auto_submit;              /* press Enter after pasting */
 } VvProfile;
 
 VvProfile *vv_profile_new(void);

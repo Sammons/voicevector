@@ -70,8 +70,8 @@ namespace VoiceVector.Win
                             Config.Save();
                         }
                     };
-                    peers.OnDeliver = (text, window, done) =>
-                        Dictation.ReceiveRoutedText(text, window, "a paired machine", done);
+                    peers.OnDeliver = (text, window, submit, done) =>
+                        Dictation.ReceiveRoutedText(text, window, submit, "a paired machine", done);
                     peers.OnIncomingPair = (name, code, answer) =>
                     {
                         var result = System.Windows.MessageBox.Show(

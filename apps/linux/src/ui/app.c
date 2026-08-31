@@ -282,12 +282,12 @@ static void load_css(void) {
 
 /* ---------------------------------------------- multi-machine glue */
 
-static void on_peer_deliver(const char *text, guint32 window,
+static void on_peer_deliver(const char *text, guint32 window, bool submit,
                             void (*done)(bool ok, const char *error, gpointer token),
                             gpointer token, gpointer user) {
     App *a = user;
     (void)window;   /* Wayland: we can only paste into the current focus */
-    vv_controller_receive_routed(a->ctl, text, done, token);
+    vv_controller_receive_routed(a->ctl, text, submit, done, token);
 }
 
 typedef struct { void (*answer)(bool, gpointer); gpointer token; } IncomingPair;

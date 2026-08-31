@@ -195,11 +195,11 @@ static void waiter_done(bool ok, const char *error, gpointer token) {
     g_mutex_unlock(&w->lock);
 }
 
-typedef struct { char *text; guint32 window; Waiter *waiter; } DeliverIdle;
+typedef struct { char *text; guint32 window; bool submit; Waiter *waiter; } DeliverIdle;
 
 static gboolean deliver_on_main(gpointer data) {
     DeliverIdle *d = data;
-    if (deliver_cb) deliver_cb(d->text, d->window, waiter_done, d->waiter, cb_user);
+    if (deliver_cb) deliver_cb(d->text, d->window, d->submit, waiter_done, d->waiter, cb_user);
     else waiter_done(false, "not ready", d->waiter);
     g_free(d->text); g_free(d);
     return G_SOURCE_REMOVE;
@@ -381,11 +381,12 @@ static void serve_peer(GIOStream *tls, GByteArray *buffer, GBytes *client_fp) {
         if (!allow_deliver) { send_frame(tls, err_msg("deliver not allowed")); vv_json_free(request); return; }
         const char *text = vv_json_get_string(request, "text", "");
         guint32 window = (guint32)vv_json_get_number(request, "window", 0);
+        bool submit = vv_json_get_bool(request, "submit", false);
         if (!*text) { send_frame(tls, err_msg("empty")); vv_json_free(request); return; }
         Waiter waiter = { 0 };
         g_mutex_init(&waiter.lock); g_cond_init(&waiter.cond);
         DeliverIdle *di = g_new0(DeliverIdle, 1);
-        di->text = g_strdup(text); di->window = window; di->waiter = &waiter;
+        di->text = g_strdup(text); di->window = window; di->submit = submit; di->waiter = &waiter;
         g_idle_add(deliver_on_main, di);
         g_mutex_lock(&waiter.lock);
         while (!waiter.done) g_cond_wait(&waiter.cond, &waiter.lock);
@@ -707,7 +708,7 @@ VvMachineContext *vv_peer_service_fetch_context(const VvPeer *peer) {
     return ctx;
 }
 
-char *vv_peer_service_deliver(const VvPeer *peer, const char *text, guint32 window) {
+char *vv_peer_service_deliver(const VvPeer *peer, const char *text, guint32 window, bool submit) {
     if (!peer->address || !*peer->address) return g_strdup("peer has no address");
     GSocketConnection *raw = NULL; GByteArray *buffer = NULL;
     char *server_name = NULL, *server_fp = NULL, *error = NULL;
@@ -720,6 +721,7 @@ char *vv_peer_service_deliver(const VvPeer *peer, const char *text, guint32 wind
         VvJson *req = msg("deliver");
         vv_json_object_set(req, "text", vv_json_string(text));
         vv_json_object_set(req, "window", vv_json_number(window));
+        vv_json_object_set(req, "submit", vv_json_bool(submit));
         VvJson *reply = send_frame(tls, req) ? read_frame(tls, buffer) : NULL;
         if (!reply || g_strcmp0(vv_json_get_string(reply, "t", ""), "ok") != 0)
             result = g_strdup(reply ? vv_json_get_string(reply, "err", "delivery failed") : "delivery failed");

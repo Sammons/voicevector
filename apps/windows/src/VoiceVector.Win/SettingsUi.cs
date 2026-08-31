@@ -431,8 +431,16 @@ namespace VoiceVector.Win
                 IsChecked = profile.ScreenshotContext,
                 Margin = new Thickness(14, 0, 0, 0),
             };
+            var submitToggle = new CheckBox
+            {
+                Content = Theme.Text("Press Enter to submit", 12),
+                IsChecked = profile.AutoSubmit,
+                Margin = new Thickness(14, 0, 0, 0),
+            };
+            submitToggle.Click += (s, e) => { profile.AutoSubmit = submitToggle.IsChecked == true; config.Save(); };
             reviewRow.Children.Add(reviewToggle);
             reviewRow.Children.Add(screenshotToggle);
+            reviewRow.Children.Add(submitToggle);
             row.Children.Add(reviewRow);
 
             var reviewBox = new ComboBox { MinWidth = 220, Margin = new Thickness(22, 4, 0, 0),

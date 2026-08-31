@@ -24,7 +24,7 @@ final class PeerService {
     private var mmConfig = MultiMachineConfig()
     func updateConfig(_ mm: MultiMachineConfig) { queue.async { self.mmConfig = mm; self.applyLocked() } }
     var addPeer: ((PeerRef) -> Void)?
-    var onDeliver: ((String, UInt32, @escaping (Bool, String) -> Void) -> Void)?
+    var onDeliver: ((String, UInt32, Bool, @escaping (Bool, String) -> Void) -> Void)?
     /// Inbound pairing UI: (peer name, code, answer) — call answer(true/false).
     var onIncomingPair: ((String, String, @escaping (Bool) -> Void) -> Void)?
 
@@ -293,6 +293,7 @@ final class PeerService {
                 }
                 let text = request["text"] as? String ?? ""
                 let window = (request["window"] as? NSNumber)?.uint32Value ?? 0
+                let submit = request["submit"] as? Bool ?? false
                 guard !text.isEmpty else {
                     send(connection, ["t": "err", "err": "empty"]) { connection.cancel() }
                     return
@@ -302,7 +303,7 @@ final class PeerService {
                         self.queue.async { self.send(connection, ["t": "err", "err": "not ready"]) { connection.cancel() } }
                         return
                     }
-                    onDeliver(text, window) { ok, message in
+                    onDeliver(text, window, submit) { ok, message in
                         self.queue.async {
                             self.send(connection, ok ? ["t": "ok"] : ["t": "err", "err": message]) { connection.cancel() }
                         }
@@ -467,7 +468,7 @@ final class PeerService {
     }
 
     /// Sends routed text to a peer, which activates `window` and pastes.
-    func deliver(text: String, window: UInt32, peer: PeerRef,
+    func deliver(text: String, window: UInt32, submit: Bool, peer: PeerRef,
                  completion: @escaping (String?) -> Void) {
         guard !peer.address.isEmpty else { completion("peer has no address"); return }
         openSession(address: peer.address, purpose: "peer") { [self] connection, reader, _, fingerprint in
@@ -477,7 +478,7 @@ final class PeerService {
                 return
             }
             queue.async { [self] in
-                send(connection, ["t": "deliver", "text": text, "window": Int(window)])
+                send(connection, ["t": "deliver", "text": text, "window": Int(window), "submit": submit])
                 readFrame(connection, reader) { response in
                     connection.cancel()
                     let ok = response?["t"] as? String == "ok"

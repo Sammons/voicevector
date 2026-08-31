@@ -32,7 +32,7 @@ namespace VoiceVector.Win.Services
         public Func<MultiMachineConfig> ConfigProvider;
         public Action<PeerRef> AddPeer;
         /// <summary>(text, windowId, done(ok, message)) on the UI thread.</summary>
-        public Action<string, uint, Action<bool, string>> OnDeliver;
+        public Action<string, uint, bool, Action<bool, string>> OnDeliver;
         /// <summary>(peerName, code, answer) on the UI thread.</summary>
         public Action<string, string, Action<bool>> OnIncomingPair;
         public Action<Action> RunOnUi = a => a();
@@ -268,13 +268,14 @@ namespace VoiceVector.Win.Services
                     }
                     var text = Json.Str(request, "text");
                     var window = (uint)Json.Num(request, "window", 0);
+                    var submit = Json.Bool(request, "submit", false);
                     if (text.Length == 0 || OnDeliver == null)
                     {
                         await SendAsync(ssl, new Dictionary<string, object> { { "t", "err" }, { "err", "empty" } }).ConfigureAwait(false);
                         return;
                     }
                     var done = new TaskCompletionSource<Tuple<bool, string>>();
-                    RunOnUi(() => OnDeliver(text, window, (ok, message) => done.TrySetResult(Tuple.Create(ok, message))));
+                    RunOnUi(() => OnDeliver(text, window, submit, (ok, message) => done.TrySetResult(Tuple.Create(ok, message))));
                     var result = await done.Task.ConfigureAwait(false);
                     await SendAsync(ssl, result.Item1
                         ? new Dictionary<string, object> { { "t", "ok" } }
@@ -420,7 +421,7 @@ namespace VoiceVector.Win.Services
         }
 
         /// <summary>Sends routed text to a peer; returns null or an error message.</summary>
-        public async Task<string> DeliverAsync(string text, uint window, PeerRef peer)
+        public async Task<string> DeliverAsync(string text, uint window, bool submit, PeerRef peer)
         {
             if (peer.Address.Length == 0) return "peer has no address";
             try
@@ -430,7 +431,7 @@ namespace VoiceVector.Win.Services
                 {
                     if (session.Item5 != peer.Fingerprint) return "could not reach " + peer.Name;
                     await SendAsync(session.Item2, new Dictionary<string, object>
-                        { { "t", "deliver" }, { "text", text }, { "window", (double)window } }).ConfigureAwait(false);
+                        { { "t", "deliver" }, { "text", text }, { "window", (double)window }, { "submit", submit } }).ConfigureAwait(false);
                     var response = await ReadFrameAsync(session.Item2, session.Item3).ConfigureAwait(false);
                     if (response != null && Json.Str(response, "t") == "ok") return null;
                     return response != null ? Json.Str(response, "err", "delivery failed") : "delivery failed";

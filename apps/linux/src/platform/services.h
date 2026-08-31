@@ -10,6 +10,8 @@ typedef enum { VV_PASTE_PASTED, VV_PASTE_COPIED_ONLY } VvPasteOutcome;
  * copied-only outcome. Must be called on the GTK main thread. */
 VvPasteOutcome vv_paste_insert(const char *text, bool auto_paste, char **reason);
 bool vv_paste_portal_available(void);
+/* Presses Enter in the focused app (auto-submit after a paste). Main thread. */
+bool vv_paste_press_enter(void);
 
 /* API keys in the Secret Service (GNOME Keyring / KWallet), keyed by provider id. */
 char *vv_secret_get(const char *provider_id);              /* NULL when absent */

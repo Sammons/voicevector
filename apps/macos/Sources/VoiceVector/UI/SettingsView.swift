@@ -457,7 +457,15 @@ struct ProfileRow: View {
                         .toggleStyle(.checkbox)
                     Toggle("Screenshot context", isOn: binding(\.screenshotContext))
                         .toggleStyle(.checkbox)
+                    Toggle("Press Enter to submit", isOn: binding(\.autoSubmit))
+                        .toggleStyle(.checkbox)
                     Spacer()
+                }
+                if profile.autoSubmit {
+                    Text("After pasting, presses Enter — for chat boxes, terminals, and text routed to another machine where no one is at the keyboard. Leave off for editors, where Enter just adds a line.")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 if profile.reviewBeforePaste {
                     HStack(spacing: 8) {

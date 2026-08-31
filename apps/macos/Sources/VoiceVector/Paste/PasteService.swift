@@ -56,6 +56,25 @@ final class PasteService {
     /// focus the destination).
     func copyToClipboard(_ text: String) { writePlain(text.trimmingCharacters(in: .newlines)) }
 
+    /// Presses Return in the frontmost app (auto-submit after a paste).
+    func pressReturn(preferAppleScript: Bool = false) async {
+        await waitForModifierRelease()
+        let useAppleScript = preferAppleScript || Self.synthesizedEventsLikelyBlocked
+        if useAppleScript {
+            let script = NSAppleScript(source: "tell application \"System Events\" to key code 36")
+            var error: NSDictionary?
+            script?.executeAndReturnError(&error)
+            if let error { Log.error("AppleScript Return failed: \(error)") }
+            return
+        }
+        guard let source = CGEventSource(stateID: .privateState),
+              let down = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_Return), keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(kVK_Return), keyDown: false) else { return }
+        down.flags = []; up.flags = []
+        down.post(tap: .cgSessionEventTap); usleep(10_000)
+        up.post(tap: .cgSessionEventTap)
+    }
+
     func insert(_ text: String, autoPaste: Bool, preferAppleScript: Bool = false) async -> PasteOutcome {
         let pasteboard = NSPasteboard.general
         // Trailing newlines auto-submit in chat TUIs and terminals.

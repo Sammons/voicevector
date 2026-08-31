@@ -202,6 +202,7 @@ static void on_profile_prompt(GtkTextBuffer *b, gpointer d) {
 static void on_profile_review(GObject *row, GParamSpec *ps, gpointer d) { ProfileUi *u = d; u->p->review_before_paste = adw_switch_row_get_active(ADW_SWITCH_ROW(row)); save(); rebuild(); }
 static void on_profile_screenshot(GObject *row, GParamSpec *ps, gpointer d) { ProfileUi *u = d; u->p->screenshot_context = adw_switch_row_get_active(ADW_SWITCH_ROW(row)); save(); }
 static void on_profile_router(GObject *row, GParamSpec *ps, gpointer d) { ProfileUi *u = d; u->p->router_enabled = adw_switch_row_get_active(ADW_SWITCH_ROW(row)); save(); rebuild(); }
+static void on_profile_submit(GObject *row, GParamSpec *ps, gpointer d) { ProfileUi *u = d; u->p->auto_submit = adw_switch_row_get_active(ADW_SWITCH_ROW(row)); save(); }
 static void on_profile_router_provider(GObject *row, GParamSpec *ps, gpointer d) {
     ProfileUi *u = d;
     guint sel = adw_combo_row_get_selected(ADW_COMBO_ROW(row));
@@ -337,6 +338,7 @@ static AdwPreferencesPage *page_dictation(void) {
             }
         }
         adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), switch_row("Screenshot context", "Attach a screenshot of every display (Screenshot portal) to cleanup and review calls. Models without vision ignore it.", p->screenshot_context, on_profile_screenshot, u));
+        adw_preferences_group_add(ADW_PREFERENCES_GROUP(group), switch_row("Press Enter to submit", "After pasting, press Enter — for chat boxes, terminals, and text routed to another machine. Leave off for editors.", p->auto_submit, on_profile_submit, u));
         adw_preferences_page_add(page, ADW_PREFERENCES_GROUP(group));
     }
 

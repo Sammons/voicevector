@@ -46,6 +46,7 @@ namespace VoiceVector.Win.Services
         public const uint KEYEVENTF_KEYUP = 0x0002;
         public const ushort VK_CONTROL = 0x11;
         public const ushort VK_V = 0x56;
+        public const ushort VK_RETURN = 0x0D;
 
         [StructLayout(LayoutKind.Sequential)]
         public struct KEYBDINPUT

@@ -439,19 +439,20 @@ final class DictationController: ObservableObject {
     }
 
     private func deliverRouted(session: ReviewSession) async {
+        let submit = session.profile?.autoSubmit == true
         guard let target = session.routeTarget else {
-            await deliver(entry: session.entry, slot: session.slot, config: session.config)
+            await deliver(entry: session.entry, slot: session.slot, config: session.config, submit: submit)
             return
         }
         if let peer = target.peer {
             state = .processing("Sending to \(target.machine)…")
             let text = session.entry.cleaned
             let error: String? = await withCheckedContinuation { done in
-                PeerService.shared.deliver(text: text, window: target.window, peer: peer) { done.resume(returning: $0) }
+                PeerService.shared.deliver(text: text, window: target.window, submit: submit, peer: peer) { done.resume(returning: $0) }
             }
             if let error {
                 notify(title: "Could not deliver to \(target.machine)", body: error + " — pasting here instead.")
-                await deliver(entry: session.entry, slot: session.slot, config: session.config)
+                await deliver(entry: session.entry, slot: session.slot, config: session.config, submit: submit)
             } else {
                 finish(with: .idle)
                 if let webhook = session.config.folderWebhooks[session.slot.folder], webhook.enabled {
@@ -474,13 +475,13 @@ final class DictationController: ObservableObject {
                 return
             }
             try? await Task.sleep(nanoseconds: 350_000_000)   // let focus settle
-            await deliver(entry: session.entry, slot: session.slot, config: session.config)
+            await deliver(entry: session.entry, slot: session.slot, config: session.config, submit: submit)
         }
     }
 
     /// Inbound routed text from a paired machine: activate the window (when
     /// we know it), paste, and save a routed entry to the library.
-    func receiveRoutedText(_ text: String, window: UInt32, from machine: String,
+    func receiveRoutedText(_ text: String, window: UInt32, submit: Bool, from machine: String,
                            completion: @escaping (Bool, String) -> Void) {
         // Not while the local user is recording OR mid-review — pasting would
         // yank focus and the clipboard out from under them.
@@ -500,6 +501,7 @@ final class DictationController: ObservableObject {
                               status: "complete", cleaned: text, raw: text)
             switch outcome {
             case .pasted:
+                if submit { await self.paste.pressReturn(preferAppleScript: config.appleScriptPaste) }
                 completion(true, "")
             case .copiedOnly(let reason):
                 entry.status = "complete (copied only)"
@@ -658,17 +660,19 @@ final class DictationController: ObservableObject {
             beginReview(entry: entry, slot: slot, config: config, profile: dictationProfile, policy: policy)
             return
         }
-        await deliver(entry: entry, slot: slot, config: config)
+        await deliver(entry: entry, slot: slot, config: config,
+                      submit: dictationProfile?.autoSubmit == true)
     }
 
     /// 3. Paste into the frontmost app, then 4. webhook (fire and forget).
     private func deliver(entry: Entry, slot: (id: String, audioURL: URL, folder: String),
-                         config: AppConfig) async {
+                         config: AppConfig, submit: Bool = false) async {
         state = .processing("Pasting…")
         let outcome = await paste.insert(entry.cleaned, autoPaste: config.autoPaste,
                                          preferAppleScript: config.appleScriptPaste)
         switch outcome {
         case .pasted:
+            if submit { await paste.pressReturn(preferAppleScript: config.appleScriptPaste) }
             finish(with: .idle)
         case .copiedOnly(let reason):
             notify(title: "Transcript copied", body: "\(reason). Press ⌘V to insert it.")

@@ -380,7 +380,8 @@ static gpointer pipeline_thread(gpointer data) {
     return NULL;
 }
 
-static void deliver(VvController *c, VvEntry *entry, const char *audio_path, const char *folder);
+static void deliver_submit(VvController *c, VvEntry *entry, const char *audio_path, const char *folder, bool submit);
+#define deliver(c,e,a,f) deliver_submit((c),(e),(a),(f),false)
 static void start_router(VvController *c, Review *r, VvProfile *profile);
 
 static gboolean pipeline_done(gpointer data) {
@@ -405,7 +406,7 @@ static gboolean pipeline_done(gpointer data) {
         }
         set_state(c, VV_STATE_REVIEWING, NULL);
     } else {
-        deliver(c, pl->entry, pl->job.audio_path, pl->job.folder);
+        deliver_submit(c, pl->entry, pl->job.audio_path, pl->job.folder, pl->profile && pl->profile->auto_submit);
     }
     vv_entry_free(pl->entry);
     vv_screenshot_set_unref(pl->screenshots);
@@ -491,11 +492,12 @@ static gpointer hook_thread(gpointer data) {
     return NULL;
 }
 
-static void deliver(VvController *c, VvEntry *entry, const char *audio_path, const char *folder) {
+static void deliver_submit(VvController *c, VvEntry *entry, const char *audio_path, const char *folder, bool submit) {
     set_state(c, VV_STATE_PROCESSING, "Pasting…");
     char *reason = NULL;
     VvPasteOutcome outcome = vv_paste_insert(entry->cleaned, c->config->auto_paste, &reason);
     if (outcome == VV_PASTE_COPIED_ONLY) { char *m = g_strdup_printf("Transcript copied — %s. Press Ctrl+V to insert it.", reason ? reason : ""); notify(c, m); g_free(m); }
+    else if (submit) vv_paste_press_enter();
     g_free(reason);
     set_state(c, VV_STATE_IDLE, NULL);
     VvWebhook *hook = g_hash_table_lookup(c->config->folder_webhooks, folder);
@@ -620,7 +622,7 @@ static void review_free(Review *r) {
 }
 
 /* Remote delivery of an accepted, routed draft (worker thread + idle). */
-typedef struct { VvController *c; Review *r; VvPeer *peer; char *error; } RouteDeliverTask;
+typedef struct { VvController *c; Review *r; VvPeer *peer; bool submit; char *error; } RouteDeliverTask;
 
 static gboolean route_deliver_done(gpointer data) {
     RouteDeliverTask *t = data;
@@ -630,7 +632,8 @@ static gboolean route_deliver_done(gpointer data) {
         char *m = g_strdup_printf("Could not deliver to %s: %s — pasting here instead.",
                                   r->route_label, t->error);
         notify(c, m); g_free(m);
-        deliver(c, r->entry, r->audio_path, r->folder);
+        VvProfile *rp = vv_config_find_profile(c->config, r->profile_id);
+        deliver_submit(c, r->entry, r->audio_path, r->folder, rp && rp->auto_submit);
     } else {
         set_state(c, VV_STATE_IDLE, NULL);
         VvWebhook *hook = g_hash_table_lookup(c->config->folder_webhooks, r->folder);
@@ -651,7 +654,7 @@ static gboolean route_deliver_done(gpointer data) {
 
 static gpointer route_deliver_thread(gpointer data) {
     RouteDeliverTask *t = data;
-    t->error = t->peer ? vv_peer_service_deliver(t->peer, t->r->entry->cleaned, t->r->route_window)
+    t->error = t->peer ? vv_peer_service_deliver(t->peer, t->r->entry->cleaned, t->r->route_window, t->submit)
                        : g_strdup("peer is gone");
     g_idle_add(route_deliver_done, t);
     return NULL;
@@ -681,21 +684,27 @@ static void end_review(VvController *c, bool paste) {
             VvPeer *p2 = g_ptr_array_index(c->config->multi_machine.peers, i);
             if (g_strcmp0(p2->fingerprint, r->route_peer_fp) == 0) { target = p2; break; }
         }
+        VvProfile *rp = vv_config_find_profile(c->config, r->profile_id);
         RouteDeliverTask *t = g_new0(RouteDeliverTask, 1);
         t->c = c; t->r = r; t->peer = target ? peer_copy(target) : NULL;
+        t->submit = rp && rp->auto_submit;
         GThread *th = g_thread_new("vv-route-deliver", route_deliver_thread, t);
         g_thread_unref(th);
         return;
     }
-    if (paste) deliver(c, r->entry, r->audio_path, r->folder); else set_state(c, VV_STATE_IDLE, NULL);
+    if (paste) {
+        VvProfile *rp = vv_config_find_profile(c->config, r->profile_id);
+        deliver_submit(c, r->entry, r->audio_path, r->folder, rp && rp->auto_submit);
+    } else set_state(c, VV_STATE_IDLE, NULL);
     review_free(r);
 }
 
-void vv_controller_receive_routed(VvController *c, const char *text,
+void vv_controller_receive_routed(VvController *c, const char *text, bool submit,
                                   void (*done)(bool ok, const char *error, gpointer token), gpointer token) {
     if (vv_controller_is_busy(c)) { done(false, "busy dictating", token); return; }
     char *reason = NULL;
     VvPasteOutcome outcome = vv_paste_insert(text, c->config->auto_paste, &reason);
+    if (outcome == VV_PASTE_PASTED && submit) vv_paste_press_enter();
     char *id = NULL, *audio = NULL;
     vv_library_new_slot(c->library, c->config->active_folder, &id, &audio);
     VvEntry *entry = vv_entry_new();

@@ -44,6 +44,6 @@ void vv_controller_discard_review(VvController *c);
 void vv_controller_retry(VvController *c, VvEntry *entry);
 /* Inbound routed text from a paired machine: paste + save. done() gets the
  * outcome. Main thread. */
-void vv_controller_receive_routed(VvController *c, const char *text,
+void vv_controller_receive_routed(VvController *c, const char *text, bool submit,
                                   void (*done)(bool ok, const char *error, gpointer token), gpointer token);
 bool vv_controller_is_busy(const VvController *c);
