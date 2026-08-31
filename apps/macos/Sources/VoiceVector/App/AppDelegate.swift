@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hud = RecordingHUD(dictation: state.dictation)
         state.hotkey.onReviewAccept = { [weak self] in self?.state.dictation.acceptReview() }
         state.hotkey.onReviewDiscard = { [weak self] in self?.state.dictation.discardReview() }
+        state.hotkey.onReviewCycle = { [weak self] delta in self?.state.dictation.cycleRouteField(by: delta) }
 
         setUpMenu()
         setUpStatusItem()
@@ -114,6 +115,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.updateStatusIcon(for: dictationState)
             }
             .store(in: &cancellables)
+
+        state.dictation.$routeFields
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] fields in self?.state.hotkey.reviewCycleActive = fields.count > 1 }
+            .store(in: &cancellables)
     }
 
     private func showFallbackAlertIfVisible(title: String, body: String) {
@@ -130,9 +136,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.state.config.multiMachine.peers.append(peer)
             }
         }
-        service.onDeliver = { [weak self] text, window, submit, done in
+        service.onDeliver = { [weak self] text, window, field, submit, done in
             guard let self else { done(false, "not ready"); return }
-            self.state.dictation.receiveRoutedText(text, window: window, submit: submit,
+            self.state.dictation.receiveRoutedText(text, window: window, field: field, submit: submit,
                                                    from: "a paired machine", completion: done)
         }
         service.onIncomingPair = { [weak self] name, code, answer in

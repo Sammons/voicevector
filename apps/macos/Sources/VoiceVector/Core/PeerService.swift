@@ -12,6 +12,13 @@ struct MachineContext {
     let screens: [ScreenshotAttachment]
 }
 
+/// A target window's preview for the routing UI: a screenshot and its input
+/// fields (normalized rects within the image), from the local machine or a peer.
+struct RouteDetail {
+    var image: Data?
+    var fields: [WindowInventory.InputField]
+}
+
 /// TLS listener + client for multi-machine peering (docs/multi-machine.md).
 /// All callbacks fire on the main queue.
 final class PeerService {
@@ -24,7 +31,7 @@ final class PeerService {
     private var mmConfig = MultiMachineConfig()
     func updateConfig(_ mm: MultiMachineConfig) { queue.async { self.mmConfig = mm; self.applyLocked() } }
     var addPeer: ((PeerRef) -> Void)?
-    var onDeliver: ((String, UInt32, Bool, @escaping (Bool, String) -> Void) -> Void)?
+    var onDeliver: ((String, UInt32, Int, Bool, @escaping (Bool, String) -> Void) -> Void)?
     /// Inbound pairing UI: (peer name, code, answer) — call answer(true/false).
     var onIncomingPair: ((String, String, @escaping (Bool) -> Void) -> Void)?
 
@@ -306,6 +313,22 @@ final class PeerService {
                                                "screens": screens, "windows": windows]) { connection.cancel() }
                     }
                 }
+            case "window":
+                guard peer.allowScreens else {
+                    send(connection, ["t": "err", "err": "screens not allowed"]) { connection.cancel() }
+                    return
+                }
+                let wid = (request["window"] as? NSNumber)?.uint32Value ?? 0
+                DispatchQueue.main.async {
+                    let jpeg = WindowInventory.windowImageJPEG(windowID: wid)?.base64EncodedString() ?? ""
+                    let fields = WindowInventory.inputFields(windowID: wid).map {
+                        ["label": $0.label, "x": $0.frame.minX, "y": $0.frame.minY,
+                         "w": $0.frame.width, "h": $0.frame.height] as [String: Any]
+                    }
+                    self.queue.async {
+                        self.send(connection, ["t": "window", "jpeg": jpeg, "fields": fields]) { connection.cancel() }
+                    }
+                }
             case "deliver":
                 guard peer.allowDeliver else {
                     send(connection, ["t": "err", "err": "deliver not allowed"]) { connection.cancel() }
@@ -313,6 +336,7 @@ final class PeerService {
                 }
                 let text = request["text"] as? String ?? ""
                 let window = (request["window"] as? NSNumber)?.uint32Value ?? 0
+                let field = (request["field"] as? NSNumber)?.intValue ?? -1
                 let submit = request["submit"] as? Bool ?? false
                 guard !text.isEmpty else {
                     send(connection, ["t": "err", "err": "empty"]) { connection.cancel() }
@@ -323,7 +347,7 @@ final class PeerService {
                         self.queue.async { self.send(connection, ["t": "err", "err": "not ready"]) { connection.cancel() } }
                         return
                     }
-                    onDeliver(text, window, submit) { ok, message in
+                    onDeliver(text, window, field, submit) { ok, message in
                         self.queue.async {
                             self.send(connection, ok ? ["t": "ok"] : ["t": "err", "err": message]) { connection.cancel() }
                         }
@@ -490,8 +514,37 @@ final class PeerService {
         }
     }
 
+    /// A peer window's preview (screenshot + input fields), or nil on failure.
+    func fetchWindow(peer: PeerRef, window: UInt32, completion: @escaping (RouteDetail?) -> Void) {
+        guard !peer.address.isEmpty else { completion(nil); return }
+        openSession(address: peer.address, purpose: "peer") { [self] connection, reader, _, fingerprint in
+            guard let connection, fingerprint == peer.fingerprint else {
+                connection?.cancel(); DispatchQueue.main.async { completion(nil) }; return
+            }
+            queue.async { [self] in
+                send(connection, ["t": "window", "window": Int(window)])
+                readFrame(connection, reader) { response in
+                    connection.cancel()
+                    guard let response, response["t"] as? String == "window" else {
+                        DispatchQueue.main.async { completion(nil) }; return
+                    }
+                    let image = (response["jpeg"] as? String).flatMap { Data(base64Encoded: $0) }
+                    let fields = (response["fields"] as? [[String: Any]] ?? []).map { f in
+                        WindowInventory.InputField(
+                            label: f["label"] as? String ?? "Field",
+                            frame: CGRect(x: (f["x"] as? NSNumber)?.doubleValue ?? 0,
+                                          y: (f["y"] as? NSNumber)?.doubleValue ?? 0,
+                                          width: (f["w"] as? NSNumber)?.doubleValue ?? 0,
+                                          height: (f["h"] as? NSNumber)?.doubleValue ?? 0))
+                    }
+                    DispatchQueue.main.async { completion(RouteDetail(image: image, fields: fields)) }
+                }
+            }
+        }
+    }
+
     /// Sends routed text to a peer, which activates `window` and pastes.
-    func deliver(text: String, window: UInt32, submit: Bool, peer: PeerRef,
+    func deliver(text: String, window: UInt32, field: Int, submit: Bool, peer: PeerRef,
                  completion: @escaping (String?) -> Void) {
         guard !peer.address.isEmpty else { completion("peer has no address"); return }
         openSession(address: peer.address, purpose: "peer") { [self] connection, reader, _, fingerprint in
@@ -501,7 +554,7 @@ final class PeerService {
                 return
             }
             queue.async { [self] in
-                send(connection, ["t": "deliver", "text": text, "window": Int(window), "submit": submit])
+                send(connection, ["t": "deliver", "text": text, "window": Int(window), "field": field, "submit": submit])
                 readFrame(connection, reader) { response in
                     connection.cancel()
                     let ok = response?["t"] as? String == "ok"

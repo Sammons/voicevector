@@ -29,8 +29,12 @@ final class HotkeyEngine {
     /// True while a draft is staged for review: ⏎ accepts, Esc discards
     /// (both swallowed so they never reach the app underneath).
     var reviewActive = false
+    /// True while the staged draft has multiple input fields to cycle with ⇥.
+    var reviewCycleActive = false
     var onReviewAccept: (() -> Void)?
     var onReviewDiscard: (() -> Void)?
+    /// ⇥ / ⇧⇥ while reviewing: cycle the target input field (+1 / -1).
+    var onReviewCycle: ((Int) -> Void)?
 
     init(profiles: [DictationProfile], startMode: TapStartMode) {
         self.profiles = HotkeyEngine.dedupe(profiles)
@@ -126,6 +130,13 @@ final class HotkeyEngine {
             }
             if keyCode == UInt16(kVK_Escape) {
                 if type == .keyDown { DispatchQueue.main.async { self.onReviewDiscard?() } }
+                return nil
+            }
+            if reviewCycleActive, keyCode == UInt16(kVK_Tab) {
+                if type == .keyDown {
+                    let delta = event.flags.contains(.maskShift) ? -1 : 1
+                    DispatchQueue.main.async { self.onReviewCycle?(delta) }
+                }
                 return nil
             }
         }

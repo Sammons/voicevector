@@ -16,7 +16,7 @@ final class RecordingHUD {
         if panel == nil {
             // Tall enough for the review staging card above the pill; the
             // view is bottom-aligned and the rest stays transparent.
-            let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 520, height: 300),
+            let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 520, height: 480),
                                 styleMask: [.nonactivatingPanel, .fullSizeContentView, .borderless],
                                 backing: .buffered, defer: false)
             panel.level = .statusBar
@@ -68,7 +68,7 @@ struct HUDView: View {
             }
             pill
         }
-        .frame(width: 520, height: 300, alignment: .bottom)
+        .frame(width: 520, height: 480, alignment: .bottom)
         .onReceive(timer) { _ in
             tick += 1
             guard dictation.state == .recording else { return }
@@ -97,12 +97,16 @@ struct HUDView: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(Theme.accent)
             }
+            if let image = dictation.routeImage, let nsImage = NSImage(data: image) {
+                routePreview(nsImage)
+            }
             HStack(spacing: 14) {
                 Label(reviewHint, systemImage: reviewHintIcon)
                     .font(.caption.weight(.medium))
                     .foregroundStyle(dictation.state == .reviewing ? Color.secondary : Theme.accent)
                 Spacer()
-                Text("⏎ paste   esc discard")
+                Text(dictation.routeFields.count > 1 ? "⇥ cycle field   ⏎ send   esc discard"
+                                                     : "⏎ send   esc discard")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -111,6 +115,43 @@ struct HUDView: View {
         .frame(width: 520)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
         .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.accent.opacity(0.35), lineWidth: 1))
+    }
+
+    /// Target window thumbnail with the selected input field highlighted.
+    private func routePreview(_ image: NSImage) -> some View {
+        let aspect = image.size.height > 0 ? image.size.width / image.size.height : 1.6
+        let width: CGFloat = 300
+        let height = min(180, width / max(0.5, aspect))
+        let fields = dictation.routeFields
+        let selected = dictation.routeSelectedField
+        return VStack(alignment: .leading, spacing: 4) {
+            ZStack(alignment: .topLeading) {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: width, height: height)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                GeometryReader { geo in
+                    if selected < fields.count {
+                        let f = fields[selected].frame
+                        Rectangle()
+                            .stroke(Theme.accent, lineWidth: 2)
+                            .background(Theme.accent.opacity(0.18))
+                            .frame(width: max(6, f.width * geo.size.width),
+                                   height: max(6, f.height * geo.size.height))
+                            .offset(x: f.minX * geo.size.width, y: f.minY * geo.size.height)
+                    }
+                }
+                .frame(width: width, height: height)
+            }
+            .frame(width: width, height: height)
+            if selected < fields.count {
+                Text("Field \(selected + 1) of \(fields.count): \(fields[selected].label)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
     }
 
     private var reviewHint: String {

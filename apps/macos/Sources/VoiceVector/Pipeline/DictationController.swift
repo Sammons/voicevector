@@ -57,6 +57,12 @@ final class DictationController: ObservableObject {
     private var pendingWindows: [WindowInfo] = []
     /// Router verdict shown in the staging card ("→ Slack on crankshaft").
     @Published var reviewRoute: String?
+    /// Target window preview (JPEG) and its input fields, for the routing HUD.
+    @Published private(set) var routeImage: Data?
+    @Published private(set) var routeFields: [WindowInventory.InputField] = []
+    @Published private(set) var routeSelectedField: Int = 0
+    /// Token so a late window-detail fetch for an old route is ignored.
+    private var routeDetailToken = 0
     /// Bumped whenever an entry is added/updated so list views reload.
     @Published private(set) var libraryGeneration = 0
     /// Mic level passthrough for the HUD.
@@ -325,6 +331,42 @@ final class DictationController: ObservableObject {
     /// Clears the route banner only if `id` is still the active review.
     private func clearRoute(_ id: String) { if review?.slot.id == id { reviewRoute = nil } }
 
+    private func clearRouteDetail() {
+        routeDetailToken += 1
+        routeImage = nil; routeFields = []; routeSelectedField = 0
+    }
+
+    /// Fetches the target window's screenshot + input fields (local or peer)
+    /// so the HUD can preview the destination and let the user pick a field.
+    private func fetchRouteDetail(window: UInt32, peer: PeerRef?) {
+        routeDetailToken += 1
+        let token = routeDetailToken
+        routeImage = nil; routeFields = []; routeSelectedField = 0
+        if let peer {
+            PeerService.shared.fetchWindow(peer: peer, window: window) { [weak self] detail in
+                guard let self, self.routeDetailToken == token, let detail else { return }
+                self.routeImage = detail.image
+                self.routeFields = detail.fields
+                self.routeSelectedField = 0
+            }
+        } else {
+            let image = WindowInventory.windowImageJPEG(windowID: window)
+            let fields = WindowInventory.inputFields(windowID: window)
+            guard routeDetailToken == token else { return }
+            routeImage = image; routeFields = fields; routeSelectedField = 0
+        }
+    }
+
+    /// ⇥ while a routed draft is staged: cycle which input field it targets.
+    func cycleRouteField(by delta: Int) {
+        guard !routeFields.isEmpty else { return }
+        let n = routeFields.count
+        routeSelectedField = ((routeSelectedField + delta) % n + n) % n
+    }
+
+    /// Whether the HUD has fields the user can cycle (drives the Tab handler).
+    var canCycleRouteField: Bool { routeFields.count > 1 }
+
     private func apply(verdict: CleanupEngine.RouterVerdict, contexts: [MachineContext],
                        sessionID: String, machineName: String) {
         guard review?.slot.id == sessionID else { return }
@@ -338,9 +380,11 @@ final class DictationController: ObservableObject {
                 review?.routeTarget = RouteTarget(machine: machineName, window: window.id,
                                                   peer: nil, label: windowLabel)
                 reviewRoute = "→ " + windowLabel
+                fetchRouteDetail(window: window.id, peer: nil)
             } else {
                 review?.routeTarget = nil
                 reviewRoute = nil     // focused window — the normal paste
+                clearRouteDetail()
             }
         } else if let peer = review?.config.multiMachine.peers.first(where: { $0.fingerprint == context.fingerprint }) {
             let label = (windowLabel.map { "\($0) on " } ?? "") + context.machine
@@ -348,6 +392,7 @@ final class DictationController: ObservableObject {
                                               window: window?.id ?? 0, peer: peer, label: label)
             reviewRoute = "→ " + label
             Log.info("Router target: peer \(peer.name) (\(peer.address)) window \(window?.id ?? 0)")
+            if let wid = window?.id { fetchRouteDetail(window: wid, peer: peer) } else { clearRouteDetail() }
         } else {
             Log.info("Router: verdict machine '\(context.machine)' matched no peer fingerprint — no route")
             reviewRoute = nil
@@ -447,11 +492,13 @@ final class DictationController: ObservableObject {
         }
         library.save(session.entry)
         libraryGeneration += 1
+        let field = routeSelectedField
         let routed = session
-        Task { await self.deliverRouted(session: routed) }
+        clearRouteDetail()
+        Task { await self.deliverRouted(session: routed, field: field) }
     }
 
-    private func deliverRouted(session: ReviewSession) async {
+    private func deliverRouted(session: ReviewSession, field: Int) async {
         let submit = session.profile?.autoSubmit == true
         guard let target = session.routeTarget else {
             await deliver(entry: session.entry, slot: session.slot, config: session.config, submit: submit)
@@ -462,7 +509,7 @@ final class DictationController: ObservableObject {
             Log.info("Deliver: sending \(session.entry.cleaned.count) chars to \(peer.name) (\(peer.address)) window \(target.window) submit=\(submit)")
             let text = session.entry.cleaned
             let error: String? = await withCheckedContinuation { done in
-                PeerService.shared.deliver(text: text, window: target.window, submit: submit, peer: peer) { done.resume(returning: $0) }
+                PeerService.shared.deliver(text: text, window: target.window, field: field, submit: submit, peer: peer) { done.resume(returning: $0) }
             }
             if let error {
                 Log.error("Deliver to \(peer.name) failed: \(error)")
@@ -491,14 +538,16 @@ final class DictationController: ObservableObject {
                 return
             }
             try? await Task.sleep(nanoseconds: 350_000_000)   // let focus settle
-            WindowInventory.focusFrontmostTextInput()          // put the caret in the input field
+            if !WindowInventory.focusInputField(windowID: target.window, index: field) {
+                WindowInventory.focusFrontmostTextInput()
+            }
             await deliver(entry: session.entry, slot: session.slot, config: session.config, submit: submit)
         }
     }
 
     /// Inbound routed text from a paired machine: activate the window (when
     /// we know it), paste, and save a routed entry to the library.
-    func receiveRoutedText(_ text: String, window: UInt32, submit: Bool, from machine: String,
+    func receiveRoutedText(_ text: String, window: UInt32, field: Int, submit: Bool, from machine: String,
                            completion: @escaping (Bool, String) -> Void) {
         Log.info("Received routed text (\(text.count) chars) window \(window) submit=\(submit) — state \(state)")
         // Not while the local user is recording OR mid-review — pasting would
@@ -513,8 +562,10 @@ final class DictationController: ObservableObject {
                 Log.error("Routed window \(window) not found; pasting into the focused window.")
             }
             try? await Task.sleep(nanoseconds: 350_000_000)
-            let inputFocused = WindowInventory.focusFrontmostTextInput()   // caret into the input field
-            Log.info("Routed paste: window focused=\(focused) input focused=\(inputFocused)")
+            // Focus the exact field the sender picked; fall back to the first.
+            let inputFocused = (window != 0 && WindowInventory.focusInputField(windowID: window, index: field))
+                || WindowInventory.focusFrontmostTextInput()
+            Log.info("Routed paste: window focused=\(focused) field \(field) input focused=\(inputFocused)")
             let config = self.configStore.config
             let outcome = await self.paste.insert(text, autoPaste: config.autoPaste,
                                                   preferAppleScript: config.appleScriptPaste)
@@ -543,6 +594,7 @@ final class DictationController: ObservableObject {
         guard state == .reviewing, var session = review else { return }
         review = nil
         reviewRoute = nil
+        clearRouteDetail()
         let draft = reviewDraft
         reviewDraft = nil
         if let draft { session.entry.cleaned = draft }

@@ -168,6 +168,126 @@ enum WindowInventory {
         return fallbackField
     }
 
+    // MARK: Input fields (for the routing preview + targeted paste)
+
+    /// One editable field in a window, for the source machine's preview.
+    struct InputField {
+        let label: String
+        /// Normalized rect within the window (0…1, top-left origin).
+        let frame: CGRect
+    }
+
+    /// The window's editable text elements in a STABLE order (used both to
+    /// describe fields to the source and to focus one by index on the target).
+    /// Returns the window's screen rect and each element with its screen rect
+    /// and a human label.
+    private static func orderedEditableElements(pid: pid_t, windowID: UInt32)
+        -> (windowRect: CGRect, elements: [(element: AXUIElement, rect: CGRect, label: String)])?
+    {
+        let app = AXUIElementCreateApplication(pid)
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value) == .success,
+              let windows = value as? [AXUIElement] else { return nil }
+        var target: AXUIElement?
+        for window in windows {
+            var id: UInt32 = 0
+            if _AXUIElementGetWindow(window, &id) == .success, id == windowID { target = window; break }
+        }
+        guard let window = target, let windowRect = axFrame(window) else { return nil }
+
+        // BFS, capped, collecting editable elements with a valid on-window rect.
+        var out: [(AXUIElement, CGRect, String)] = []
+        var queue: [(AXUIElement, Int)] = [(window, 0)]
+        var scanned = 0
+        while !queue.isEmpty, scanned < 6000 {
+            let (element, depth) = queue.removeFirst()
+            scanned += 1
+            if isEditable(element), let rect = axFrame(element),
+               rect.width >= 12, rect.height >= 8, windowRect.intersects(rect) {
+                out.append((element, rect, fieldLabel(element)))
+            }
+            if depth < 18 {
+                var childrenRef: CFTypeRef?
+                if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef) == .success,
+                   let children = childrenRef as? [AXUIElement] {
+                    for child in children { queue.append((child, depth + 1)) }
+                }
+            }
+        }
+        return (windowRect, out)
+    }
+
+    /// The window's fields as normalized rects + labels, for the source preview.
+    static func inputFields(windowID: UInt32) -> [InputField] {
+        guard let target = list().first(where: { $0.id == windowID }),
+              let (windowRect, elements) = orderedEditableElements(pid: target.pid, windowID: windowID),
+              windowRect.width > 0, windowRect.height > 0 else { return [] }
+        return elements.map { _, rect, label in
+            let nx = (rect.minX - windowRect.minX) / windowRect.width
+            let ny = (rect.minY - windowRect.minY) / windowRect.height
+            let nw = rect.width / windowRect.width
+            let nh = rect.height / windowRect.height
+            return InputField(label: label, frame: CGRect(x: nx, y: ny, width: nw, height: nh))
+        }
+    }
+
+    /// Focuses the field at `index` in the window's stable field order, for the
+    /// target machine's paste. index < 0 or out of range → first field.
+    @discardableResult
+    static func focusInputField(windowID: UInt32, index: Int) -> Bool {
+        guard let target = list().first(where: { $0.id == windowID }),
+              let (_, elements) = orderedEditableElements(pid: target.pid, windowID: windowID),
+              !elements.isEmpty else { return false }
+        let i = (index >= 0 && index < elements.count) ? index : 0
+        return AXUIElementSetAttributeValue(elements[i].element, kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success
+    }
+
+    /// A JPEG screenshot of just this window (for the source preview).
+    static func windowImageJPEG(windowID: UInt32, maxWidth: CGFloat = 560) -> Data? {
+        guard let image = CGWindowListCreateImage(.null, .optionIncludingWindow, windowID,
+                                                  [.boundsIgnoreFraming, .bestResolution]),
+              image.width > 8, image.height > 8 else { return nil }
+        let scale = min(1, maxWidth / CGFloat(image.width))
+        let size = NSSize(width: CGFloat(image.width) * scale, height: CGFloat(image.height) * scale)
+        let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width), pixelsHigh: Int(size.height),
+                                   bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                   colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)
+        guard let rep, let context = NSGraphicsContext(bitmapImageRep: rep) else { return nil }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        context.cgContext.interpolationQuality = .high
+        context.cgContext.draw(image, in: CGRect(origin: .zero, size: size))
+        NSGraphicsContext.restoreGraphicsState()
+        return rep.representation(using: .jpeg, properties: [.compressionFactor: 0.55])
+    }
+
+    /// The screen rect (top-left origin) of an AX element, if it exposes one.
+    private static func axFrame(_ element: AXUIElement) -> CGRect? {
+        var posRef: CFTypeRef?, sizeRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posRef) == .success,
+              AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeRef) == .success else { return nil }
+        var point = CGPoint.zero, size = CGSize.zero
+        guard AXValueGetValue(posRef as! AXValue, .cgPoint, &point),
+              AXValueGetValue(sizeRef as! AXValue, .cgSize, &size) else { return nil }
+        return CGRect(origin: point, size: size)
+    }
+
+    private static func fieldLabel(_ element: AXUIElement) -> String {
+        for attribute in [kAXTitleAttribute, kAXPlaceholderValueAttribute, kAXDescriptionAttribute] {
+            var value: CFTypeRef?
+            if AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
+               let text = value as? String, !text.trimmingCharacters(in: .whitespaces).isEmpty {
+                return text.count > 40 ? String(text.prefix(40)) + "…" : text
+            }
+        }
+        var roleRef: CFTypeRef?
+        if AXUIElementCopyAttributeValue(element, kAXRoleDescriptionAttribute as CFString, &roleRef) == .success,
+           let role = roleRef as? String, !role.isEmpty {
+            return role.capitalized
+        }
+        return "Text field"
+    }
+
     /// Router input: one numbered line per window.
     static func describe(_ windows: [WindowInfo]) -> String {
         windows.map { window in

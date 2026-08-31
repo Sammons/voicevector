@@ -6,6 +6,20 @@ all three apps share one version number.
 
 ## Unreleased
 
+- **See where routed text is going, and pick the field.** When the router
+  targets a window, the staging card now shows a thumbnail of that window with
+  the destination input field highlighted; press ⇥ (⇧⇥ to go back) to cycle
+  through the window's input fields before you hit ⏎. The receiving machine
+  focuses the exact field you chose. Works for a window on this machine or a
+  paired one (macOS; the target must share its screen). New `window` peer
+  request and a `field` index on `deliver` (docs/multi-machine.md).
+- **Routed text lands in the app's input field.** After the receiving machine
+  foregrounds the target app, its text input isn't always focused, so the
+  paste went nowhere. macOS now walks the foregrounded window's Accessibility
+  tree and focuses the first editable text field/area (the chat box, terminal,
+  etc.) before pasting. Needs the receiving Mac's Accessibility permission.
+  (Windows foregrounds and pastes into the app's focused control; Linux/Wayland
+  pastes into the focused window — no per-field control there.)
 - **Cross-machine routing actually reaches paired machines.** Pairing now
   records the peer's network address on *both* sides (the receiving side reads
   it from the connection), so you no longer have to type it in by hand. And a

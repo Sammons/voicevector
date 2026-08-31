@@ -75,12 +75,19 @@ peer it dialed. One request/response per connection; requests:
   Requires **allowScreens**. Screens are the standard captioned per-display
   JPEGs; `windows` is empty on platforms that cannot enumerate windows
   (Linux/Wayland).
-- `{"t":"deliver","text":"…","window":N,"submit":false}` → `{"t":"ok"}` or
+- `{"t":"window","window":N}` → `{"t":"window","jpeg":"<base64>","fields":
+  [{"label":"…","x":…,"y":…,"w":…,"h":…}]}`. Requires **allowScreens**. A
+  screenshot of window `N` plus its editable text fields as rects normalized
+  within the window, for the source's routing preview. Empty `fields` on
+  platforms that can't enumerate them.
+- `{"t":"deliver","text":"…","window":N,"field":-1,"submit":false}` → `{"t":"ok"}` or
   `{"t":"err","err":"…"}`. Requires **allowDeliver**. The peer activates
   window `N` first when it can (`0` or unknown id = paste into the current
-  focus), then runs its normal paste path; when `submit` is true it presses
-  Enter afterward (auto-submit). The text is also saved to the peer's library
-  as a routed entry.
+  focus), then focuses input field `field` in that window (macOS, via
+  Accessibility; `-1` = the first field) and runs its normal paste path; when
+  `submit` is true it presses Enter
+  afterward (auto-submit). The text is also saved to the peer's library as a
+  routed entry.
 
 ## AI routing
 
