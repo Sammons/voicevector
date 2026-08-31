@@ -235,6 +235,15 @@ static gboolean local_context_on_main(gpointer data) {
 
 /* ------------------------------------------------------- server */
 
+static char *connection_remote_host(GSocketConnection *raw) {
+    GSocketAddress *addr = g_socket_connection_get_remote_address(raw, NULL);
+    if (!addr || !G_IS_INET_SOCKET_ADDRESS(addr)) { if (addr) g_object_unref(addr); return NULL; }
+    GInetAddress *ia = g_inet_socket_address_get_address(G_INET_SOCKET_ADDRESS(addr));
+    char *host = ia ? g_inet_address_to_string(ia) : NULL;
+    g_object_unref(addr);
+    return host;
+}
+
 static VvPeer *find_peer_by_fp(const char *fp_hex) {
     for (guint i = 0; i < config->multi_machine.peers->len; i++) {
         VvPeer *p = g_ptr_array_index(config->multi_machine.peers, i);
@@ -243,7 +252,7 @@ static VvPeer *find_peer_by_fp(const char *fp_hex) {
     return NULL;
 }
 
-typedef struct { char *name; char *fp; } AddPeerIdle;
+typedef struct { char *name; char *fp; char *address; } AddPeerIdle;
 
 static gboolean add_peer_on_main(gpointer data) {
     AddPeerIdle *a = data;
@@ -251,16 +260,17 @@ static gboolean add_peer_on_main(gpointer data) {
         VvPeer *p = vv_peer_ref_new();
         g_free(p->name); p->name = g_strdup(a->name);
         g_free(p->fingerprint); p->fingerprint = g_strdup(a->fp);
+        if (a->address) { g_free(p->address); p->address = g_strdup(a->address); }
         g_ptr_array_add(config->multi_machine.peers, p);
         char *path = vv_config_default_path();
         vv_config_save(config, path);
         g_free(path);
     }
-    g_free(a->name); g_free(a->fp); g_free(a);
+    g_free(a->name); g_free(a->fp); g_free(a->address); g_free(a);
     return G_SOURCE_REMOVE;
 }
 
-static void serve_pairing(GIOStream *tls, GByteArray *buffer, const char *peer_name, GBytes *client_fp) {
+static void serve_pairing(GIOStream *tls, GByteArray *buffer, const char *peer_name, GBytes *client_fp, const char *remote_host) {
     if (!g_atomic_int_compare_and_exchange(&pairing_busy, 0, 1)) {
         send_frame(tls, err_msg("busy"));
         return;
@@ -319,6 +329,7 @@ static void serve_pairing(GIOStream *tls, GByteArray *buffer, const char *peer_n
         AddPeerIdle *ai = g_new0(AddPeerIdle, 1);
         ai->name = g_strdup(peer_name);
         ai->fp = vv_peer_hex(g_bytes_get_data(client_fp, NULL), 32);
+        ai->address = g_strdup(remote_host ? remote_host : "");
         g_idle_add(add_peer_on_main, ai);
         send_frame(tls, msg("confirm"));
     }
@@ -400,6 +411,7 @@ static void serve_peer(GIOStream *tls, GByteArray *buffer, GBytes *client_fp) {
 static gpointer serve_thread(gpointer data) {
     GSocketConnection *raw = data;
     set_socket_timeout(raw, 30);
+    char *remote_host = connection_remote_host(raw);
     GError *error = NULL;
     GIOStream *tls = g_tls_server_connection_new(G_IO_STREAM(raw), identity, &error);
     if (!tls) {
@@ -418,7 +430,7 @@ static gpointer serve_thread(gpointer data) {
             if (hello && g_strcmp0(vv_json_get_string(hello, "t", ""), "hello") == 0) {
                 const char *purpose = vv_json_get_string(hello, "purpose", "");
                 char *peer_name = g_strdup(vv_json_get_string(hello, "name", "?"));
-                if (strcmp(purpose, "pair") == 0) serve_pairing(tls, buffer, peer_name, client_fp);
+                if (strcmp(purpose, "pair") == 0) serve_pairing(tls, buffer, peer_name, client_fp, remote_host);
                 else if (strcmp(purpose, "peer") == 0) serve_peer(tls, buffer, client_fp);
                 g_free(peer_name);
             }
@@ -429,6 +441,7 @@ static gpointer serve_thread(gpointer data) {
     }
     g_io_stream_close(tls, NULL, NULL);
     g_object_unref(tls);
+    g_free(remote_host);
     g_object_unref(raw);
     return NULL;
 }

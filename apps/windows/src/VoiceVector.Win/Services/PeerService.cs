@@ -161,9 +161,11 @@ namespace VoiceVector.Win.Services
                     var hello = await ReadFrameAsync(ssl, buffer).ConfigureAwait(false);
                     if (hello == null || Json.Str(hello, "t") != "hello") return;
                     var peerName = Json.Str(hello, "name", "?");
+                    string remoteHost = "";
+                    try { remoteHost = ((System.Net.IPEndPoint)client.Client.RemoteEndPoint).Address.ToString(); } catch { }
                     switch (Json.Str(hello, "purpose"))
                     {
-                        case "pair": await ServePairingAsync(ssl, buffer, peerName, remote).ConfigureAwait(false); break;
+                        case "pair": await ServePairingAsync(ssl, buffer, peerName, remote, remoteHost).ConfigureAwait(false); break;
                         case "peer": await ServePeerAsync(ssl, buffer, remote).ConfigureAwait(false); break;
                     }
                 }
@@ -179,7 +181,7 @@ namespace VoiceVector.Win.Services
             }
         }
 
-        private async Task ServePairingAsync(SslStream ssl, List<byte> buffer, string peerName, byte[] clientFp)
+        private async Task ServePairingAsync(SslStream ssl, List<byte> buffer, string peerName, byte[] clientFp, string remoteHost)
         {
             if (OnIncomingPair == null
                 || System.Threading.Interlocked.CompareExchange(ref _pairingBusy, 1, 0) != 0)
@@ -216,7 +218,7 @@ namespace VoiceVector.Win.Services
                 }
                 var answer = await remoteAnswer.ConfigureAwait(false);
                 if (answer == null || Json.Str(answer, "t") != "confirm") return;
-                var peer = new PeerRef { Name = peerName, Fingerprint = PeerCrypto.ToHex(clientFp) };
+                var peer = new PeerRef { Name = peerName, Fingerprint = PeerCrypto.ToHex(clientFp), Address = remoteHost ?? "" };
                 RunOnUi(() => { if (AddPeer != null) AddPeer(peer); });
                 await SendAsync(ssl, new Dictionary<string, object> { { "t", "confirm" } }).ConfigureAwait(false);
             }

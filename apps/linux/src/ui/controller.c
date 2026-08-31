@@ -773,8 +773,18 @@ static gpointer router_thread(gpointer data) {
     GPtrArray *contexts = g_ptr_array_new_with_free_func((GDestroyNotify)vv_machine_context_free);
     g_ptr_array_add(contexts, vv_peer_service_local_context(t->machine_name, t->screens));
     for (guint i = 0; i < t->peers->len; i++) {
-        VvMachineContext *ctx = vv_peer_service_fetch_context(g_ptr_array_index(t->peers, i));
-        if (ctx) g_ptr_array_add(contexts, ctx);
+        VvPeer *peer = g_ptr_array_index(t->peers, i);
+        if (!peer->address || !*peer->address) continue;
+        VvMachineContext *ctx = vv_peer_service_fetch_context(peer);
+        if (!ctx) {
+            /* A peer that doesn't share its screens is still routable
+             * (window 0 = its focus), so "send this to <machine>" works. */
+            ctx = g_new0(VvMachineContext, 1);
+            ctx->machine = g_strdup(peer->name);
+            ctx->window_lines = g_strdup("");
+            ctx->screens = g_ptr_array_new_with_free_func((GDestroyNotify)vv_screenshot_free);
+        }
+        g_ptr_array_add(contexts, ctx);
     }
     GPtrArray *machines = g_ptr_array_new_with_free_func((GDestroyNotify)vv_router_machine_free);
     GPtrArray *attachments = g_ptr_array_new_with_free_func((GDestroyNotify)vv_screenshot_free);

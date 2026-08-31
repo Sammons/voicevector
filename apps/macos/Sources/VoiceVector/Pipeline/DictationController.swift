@@ -262,17 +262,26 @@ final class DictationController: ObservableObject {
         var contexts = [local]
         let peers = mm.peers.filter { !$0.address.isEmpty }
         if !peers.isEmpty {
-            contexts += await withTaskGroup(of: MachineContext?.self) { group in
+            // Fetch each peer's screens/windows when it shares them; otherwise
+            // it still appears as a routable machine (window 0 = its focus), so
+            // "send this to <machine>" works without screen-sharing permission.
+            let fetched = await withTaskGroup(of: (PeerRef, MachineContext?).self) { group in
                 for peer in peers {
                     group.addTask {
-                        await withCheckedContinuation { done in
+                        let context = await withCheckedContinuation { done in
                             PeerService.shared.fetchContext(peer: peer) { done.resume(returning: $0) }
                         }
+                        return (peer, context)
                     }
                 }
-                var found: [MachineContext] = []
-                for await context in group { if let context { found.append(context) } }
+                var found: [(PeerRef, MachineContext?)] = []
+                for await pair in group { found.append(pair) }
                 return found
+            }
+            for (peer, context) in fetched {
+                contexts.append(context ?? MachineContext(
+                    machine: peer.name, isLocal: false, fingerprint: peer.fingerprint,
+                    windows: [], windowLines: "", screens: []))
             }
         }
         guard review?.slot.id == id else { return }   // this review ended/replaced while gathering

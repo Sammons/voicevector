@@ -292,10 +292,16 @@ namespace VoiceVector.Win.Services
             if (peers.Count > 0)
             {
                 var fetches = peers.Select(p => PeerService.Shared.FetchContextAsync(p)).ToList();
-                foreach (var fetch in fetches)
+                for (int i = 0; i < peers.Count; i++)
                 {
-                    var context = await fetch.ConfigureAwait(false);
-                    if (context != null) contexts.Add(context);
+                    var context = await fetches[i].ConfigureAwait(false);
+                    // A peer that doesn't share its screens is still routable
+                    // (window 0 = its focus), so "send this to <machine>" works.
+                    contexts.Add(context ?? new MachineContext
+                    {
+                        Machine = peers[i].Name, IsLocal = false, Fingerprint = peers[i].Fingerprint,
+                        WindowLines = "",
+                    });
                 }
             }
             if (_review != session) return;   // review ended while gathering

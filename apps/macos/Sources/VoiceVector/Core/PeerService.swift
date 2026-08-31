@@ -108,6 +108,25 @@ final class PeerService {
         return parameters
     }
 
+    /// The remote host (IP or hostname) of a ready connection, so the
+    /// receiving side of pairing can dial back without the user typing it.
+    private func remoteHost(of connection: NWConnection) -> String? {
+        guard let endpoint = connection.currentPath?.remoteEndpoint else { return nil }
+        switch endpoint {
+        case .hostPort(let host, _):
+            switch host {
+            case .ipv4(let addr): return "\(addr)"
+            case .ipv6(let addr):
+                // Strip the scope id (…%en0) NWEndpoint appends.
+                let text = "\(addr)"
+                return text.split(separator: "%").first.map(String.init) ?? text
+            case .name(let name, _): return name
+            @unknown default: return nil
+            }
+        default: return nil
+        }
+    }
+
     /// The peer's certificate fingerprint, once a connection is ready.
     private func peerFingerprint(of connection: NWConnection) -> String? {
         guard let metadata = connection.metadata(definition: NWProtocolTLS.definition)
@@ -237,7 +256,8 @@ final class PeerService {
                 let finish: () -> Void = { [self] in
                     if remoteConfirmed, localAnswer == true {
                         DispatchQueue.main.async {
-                            self.addPeer?(PeerRef(name: peerName, fingerprint: clientFP.hexString, address: ""))
+                            let host = self.remoteHost(of: connection) ?? ""
+                            self.addPeer?(PeerRef(name: peerName, fingerprint: clientFP.hexString, address: host))
                         }
                         send(connection, ["t": "confirm"]) { unbusy(); connection.cancel() }
                     }
