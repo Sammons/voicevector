@@ -719,6 +719,24 @@ struct MultiMachineSettings: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "flask.fill")
+                        .foregroundStyle(.orange)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Experimental")
+                            .font(.headline)
+                            .foregroundStyle(.orange)
+                        Text("Multi-machine peering and AI routing are new and rough around the edges — pairing, permissions, and routing to another machine can misbehave. Great to try; don't rely on it yet. Feedback welcome.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer()
+                }
+                .padding(12)
+                .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.orange.opacity(0.35), lineWidth: 1))
+
                 VStack(alignment: .leading, spacing: 8) {
                     Text("This machine").vvSectionTitle()
                     Toggle("Allow paired machines to connect", isOn: $app.config.multiMachine.enabled)

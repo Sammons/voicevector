@@ -91,6 +91,12 @@ peer it dialed. One request/response per connection; requests:
 
 ## AI routing
 
+The router is given a single numbered list of destinations (0 = the current
+focus, then one per candidate window across all machines) and replies with
+`{"target": <number>}`. The app maps the number back to the machine + window,
+so the model never echoes an opaque window id.
+
+
 Per hotkey, only meaningful with **Review before pasting** on. At routing
 time the initiating machine gathers its own context plus `context` from
 every peer with an address, sends the draft + all window lists + all

@@ -734,6 +734,18 @@ namespace VoiceVector.Win
             var config = Program.Config;
             var mm = config.MultiMachine;
 
+            var expTitle = Theme.Text("⚗ Experimental", 13);
+            expTitle.Foreground = new SolidColorBrush(Color.FromRgb(0xE0, 0x8A, 0x1E));
+            expTitle.FontWeight = FontWeights.SemiBold;
+            stack.Children.Add(expTitle);
+            var expBody = Theme.Text(
+                "Multi-machine peering and AI routing are new and rough around the edges — pairing, "
+                + "permissions, and routing to another machine can misbehave. Great to try; don't rely "
+                + "on it yet. Feedback welcome.", 11.5, secondary: true);
+            expBody.TextWrapping = TextWrapping.Wrap;
+            expBody.Margin = new Thickness(0, 2, 0, 12);
+            stack.Children.Add(expBody);
+
             var enabled = new CheckBox
             {
                 Content = Theme.Text("Allow paired machines to connect"),

@@ -4,7 +4,11 @@ All notable changes to VoiceVector. Each release's entry doubles as its
 GitHub release notes. Versions follow [semantic versioning](https://semver.org);
 all three apps share one version number.
 
-## Unreleased
+## v0.6.0 — 2026-08-31
+
+Big release: review-before-pasting, multi-machine peering, and AI routing.
+Multi-machine and routing are labeled **Experimental** in Settings — new and
+still rough; great to try, don't rely on them yet.
 
 - **Router picks a numbered destination, not an opaque window id.** The router
   model now gets one flat, numbered list of destinations (0 = leave the cursor

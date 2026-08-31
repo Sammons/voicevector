@@ -630,6 +630,12 @@ static AdwPreferencesPage *page_multimachine(void) {
     adw_preferences_page_set_title(page, "Multi-machine");
     adw_preferences_page_set_icon_name(page, "network-workgroup-symbolic");
 
+    GtkWidget *exp = adw_preferences_group_new();
+    adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(exp), "Experimental");
+    adw_preferences_group_set_description(ADW_PREFERENCES_GROUP(exp),
+        "Multi-machine peering and AI routing are new and rough around the edges — pairing, permissions, and routing to another machine can misbehave. Great to try; don't rely on it yet. Feedback welcome.");
+    adw_preferences_page_add(page, ADW_PREFERENCES_GROUP(exp));
+
     GtkWidget *self_group = adw_preferences_group_new();
     adw_preferences_group_set_title(ADW_PREFERENCES_GROUP(self_group), "This machine");
     adw_preferences_group_set_description(ADW_PREFERENCES_GROUP(self_group),
