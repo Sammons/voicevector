@@ -4,11 +4,23 @@ All notable changes to VoiceVector. Each release's entry doubles as its
 GitHub release notes. Versions follow [semantic versioning](https://semver.org);
 all three apps share one version number.
 
-## Unreleased
+## v0.6.2 — 2026-09-14
 
-- Windows: single-exe download (no zip, no .config), app + tray icons,
-  Fluent restyle of every control, optional user-land installer with
-  Start Menu shortcut and autostart.
+Windows delivery and polish, from user testing:
+
+- **Single-exe download — no zip.** The Windows release is now one signed
+  `VoiceVector-windows-x64.exe` (SmartScreen shows a verified publisher);
+  no zip to extract, no `.config` sidecar, and the in-app updater swaps the
+  exe directly.
+- **Real app icon everywhere** — exe, title bar, and system tray (the tray
+  previously showed the default application glyph).
+- **Fluent styling across the app** — checkboxes, combo dropdowns, radio
+  buttons, text fields and tooltips now match the violet/Fluent look instead
+  of WPF's legacy default chrome.
+- **Optional user-land installer** — first run offers to copy the app to
+  `%LOCALAPPDATA%\Programs\VoiceVector` with a per-user Start Menu shortcut
+  and optional start-with-Windows. Never needs admin; declining keeps the
+  portable single file.
 
 ## v0.6.1 — 2026-09-13
 
