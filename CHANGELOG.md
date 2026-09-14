@@ -4,6 +4,12 @@ All notable changes to VoiceVector. Each release's entry doubles as its
 GitHub release notes. Versions follow [semantic versioning](https://semver.org);
 all three apps share one version number.
 
+## Unreleased
+
+- Windows: single-exe download (no zip, no .config), app + tray icons,
+  Fluent restyle of every control, optional user-land installer with
+  Start Menu shortcut and autostart.
+
 ## v0.6.1 — 2026-09-13
 
 - **Windows builds are now Authenticode-signed.** Releases are signed via
