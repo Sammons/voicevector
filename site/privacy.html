@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy — VoiceVector</title>
+<meta name="description" content="VoiceVector collects no telemetry, cookies, or data.">
+<link rel="icon" href='data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="%237359F2"/><g fill="white"><rect x="10" y="24" width="4" height="16" rx="2"/><rect x="18" y="18" width="4" height="28" rx="2"/><rect x="26" y="27" width="4" height="10" rx="2"/><rect x="34" y="27" width="4" height="10" rx="2"/><rect x="42" y="18" width="4" height="28" rx="2"/><rect x="50" y="24" width="4" height="16" rx="2"/></g></svg>'>
+<style>
+  :root {
+    --paper: #FAFAFC;
+    --ink: #1B1830;
+    --fade: #6C6884;
+    --line: rgba(27, 24, 48, 0.09);
+    --accent: #7359F2;
+    --display: ui-rounded, "SF Pro Rounded", -apple-system, "Segoe UI Variable Display", system-ui, sans-serif;
+    --body: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #131120;
+      --ink: #ECEAF6;
+      --fade: #9A95B5;
+      --line: rgba(236, 234, 246, 0.12);
+    }
+  }
+  * { margin: 0; box-sizing: border-box; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--body);
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 640px; margin: 0 auto; padding: 0 24px; }
+  header { padding: 72px 0 24px; }
+  .wordmark {
+    font-family: var(--display);
+    font-weight: 700;
+    font-size: 22px;
+    letter-spacing: -0.02em;
+    color: var(--ink);
+    text-decoration: none;
+  }
+  h1 {
+    font-family: var(--display);
+    font-size: 40px;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    margin-top: 24px;
+  }
+  p {
+    font-size: 17px;
+    line-height: 1.65;
+    margin: 20px 0;
+    color: var(--ink);
+  }
+  p.fade { color: var(--fade); font-size: 15px; }
+  strong { font-weight: 650; }
+  footer {
+    margin-top: 64px;
+    padding: 28px 0 48px;
+    border-top: 1px solid var(--line);
+    font-size: 13.5px;
+    color: var(--fade);
+  }
+  footer a { color: var(--fade); }
+  footer a:hover { color: var(--accent); }
+  footer .dot { margin: 0 10px; opacity: .5; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <a class="wordmark" href="/">VoiceVector</a>
+      <h1>Privacy</h1>
+    </header>
+
+    <p>VoiceVector doesn't collect any telemetry, cookies, or data.</p>
+    <p>The app talks directly to the AI providers you configure — your dictations
+    go from your machine to them, and back. Those interactions are governed by
+    the terms and privacy policies of the providers you choose. VoiceVector
+    itself collects no data: no analytics, no crash reporting, no account, no
+    tracking.</p>
+    <p>This website serves static pages only — no cookies, no analytics.</p>
+
+    <footer>
+      <div class="wrap" style="padding:0">
+        © 2026 Sammons Software LLC
+        <span class="dot">·</span>
+        <a href="/">VoiceVector</a>
+      </div>
+    </footer>
+  </div>
+</body>
+</html>
