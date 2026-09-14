@@ -4,6 +4,17 @@ All notable changes to VoiceVector. Each release's entry doubles as its
 GitHub release notes. Versions follow [semantic versioning](https://semver.org);
 all three apps share one version number.
 
+## v0.6.1 — 2026-09-13
+
+- **Windows builds are now Authenticode-signed.** Releases are signed via
+  Azure Artifact Signing with a public-trust certificate issued to
+  **Sammons Software LLC**; the signing key never leaves Microsoft's HSM and
+  CI authenticates keylessly through GitHub OIDC. The exe in this and all
+  future releases shows a verified publisher in SmartScreen instead of the
+  "unknown publisher" warning. Past unsigned releases keep validating
+  forever via their timestamp.
+- No code changes since v0.6.0 — this release exists to ship the signature.
+
 ## v0.6.0 — 2026-08-31
 
 Big release: review-before-pasting, multi-machine peering, and AI routing.
