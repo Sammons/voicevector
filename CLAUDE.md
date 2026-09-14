@@ -20,12 +20,12 @@ frontmost app → save as Markdown → optional per-folder webhook.
   `make macos` (app bundle at `apps/macos/build/VoiceVector.app`),
   `make macos-test` (builds debug + runs `VoiceVector --self-test`).
 - Windows app (Windows box only): `make windows`, or
-  `dotnet publish src\VoiceVector.App -c Release -r win-x64 -p:Platform=x64 --self-contained`.
+  `dotnet build src/VoiceVector.Win -c Release`.
 - Windows core logic (any OS): `make windows-test` runs
   `VoiceVector.SelfTest` — works on Linux
   (`DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1`, SDK in `~/.dotnet`).
-- WinUI shell syntax-check from Linux/macOS:
-  `dotnet build apps/windows/src/VoiceVector.App -p:Platform=x64 -p:WindowsAppSDKSelfContained=false -p:EnableCoreMrtTooling=false`.
+- Compile-check the WPF app from Linux/macOS (no Windows needed):
+  `make windows-compile-check` (Docker, SDK 10, EnableWindowsTargeting).
 
 ## Hard rules
 

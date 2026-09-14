@@ -1,0 +1,22 @@
+# Dotnet utilities for hosts without a native SDK (macOS arm64 dev box).
+# The Windows app compiles anywhere with EnableWindowsTargeting (reference
+# assemblies only); full builds/tests still run in CI / on Windows.
+#
+#   docker compose run --rm dotnet build apps/windows/src/VoiceVector.Win -c Release
+#   docker compose run --rm dotnet run --project apps/windows/src/VoiceVector.SelfTest
+#
+# NuGet packages cache in a named volume so repeat runs are fast.
+
+services:
+  dotnet:
+    image: mcr.microsoft.com/dotnet/sdk:10.0
+    working_dir: /repo
+    volumes:
+      - .:/repo
+      - dotnet-nuget-cache:/root/.nuget/packages
+    environment:
+      DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "1"
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+
+volumes:
+  dotnet-nuget-cache:

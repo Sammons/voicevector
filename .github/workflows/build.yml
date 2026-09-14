@@ -105,9 +105,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: VoiceVector-windows-x64
-          path: |
-            apps/windows/src/VoiceVector.Win/bin/Release/net48/VoiceVector.exe
-            apps/windows/src/VoiceVector.Win/bin/Release/net48/VoiceVector.exe.config
+          path: apps/windows/src/VoiceVector.Win/bin/Release/net48/VoiceVector.exe
           if-no-files-found: error
 
   macos-app:

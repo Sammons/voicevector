@@ -35,9 +35,10 @@ call), a customizable cleanup prompt, and one-click in-app updates.
 **Download:** prebuilt apps for both platforms are on the
 [Releases page](https://github.com/Sammons/voicevector/releases), built and
 E2E-tested by CI. macOS builds are Developer ID signed and notarized — they
-open first try. Windows builds are Authenticode-signed via Azure Artifact
-Signing (certificate issued to Sammons Software LLC) — SmartScreen shows a
-verified publisher.
+open first try. Windows is a single Authenticode-signed exe (Azure Artifact
+Signing, certificate issued to Sammons Software LLC) — download, run, done;
+no installer, no admin. On first run it offers to copy itself to your user
+profile with a Start Menu shortcut.
 
 Build: `make macos` / `make windows` / `make -C apps/linux` (see each app's README for details).
 Both apps carry a built-in dependency-free test suite: `--self-test`.

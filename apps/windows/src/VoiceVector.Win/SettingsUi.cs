@@ -981,6 +981,30 @@ namespace VoiceVector.Win
             paste.Click += (s, e) => { config.AutoPaste = paste.IsChecked == true; config.Save(); };
             stack.Children.Add(paste);
 
+            // User-land install: autostart via HKCU Run. Only meaningful when
+            // running the installed copy (an autostart entry pointing at a
+            // build/ temp exe would be a trap).
+            var autoStart = new CheckBox
+            {
+                Content = Theme.Text("Start with Windows"),
+                IsChecked = InstallService.IsAutoStart,
+                Margin = new Thickness(0, 0, 0, 2),
+            };
+            autoStart.Click += (s, e) =>
+                InstallService.SetAutoStart(autoStart.IsChecked == true);
+            autoStart.IsEnabled = InstallService.IsRunningFromInstall;
+            stack.Children.Add(autoStart);
+            if (!InstallService.IsRunningFromInstall)
+            {
+                var autoStartHint = Theme.Text(
+                    "Enabled once you install VoiceVector (it will offer to on launch, or run it from "
+                    + InstallService.InstallDir + ").",
+                    11.5, secondary: true);
+                autoStartHint.TextWrapping = TextWrapping.Wrap;
+                autoStartHint.Margin = new Thickness(0, 0, 0, 8);
+                stack.Children.Add(autoStartHint);
+            }
+
             // Updates.
             var updateRow = new StackPanel { Orientation = Orientation.Horizontal };
             var version = Theme.Text("Version " + UpdateService.CurrentVersion, 12.5, secondary: true);

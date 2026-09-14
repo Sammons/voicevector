@@ -47,6 +47,7 @@ namespace VoiceVector.Win
                 app.Startup += (s, e) =>
                 {
                     Diag.Breadcrumb("Startup");
+                    Theme.ApplyAppStyles(app);
                     Config = AppConfig.Load();
                     Config.Save(); // materialize config.json so it's discoverable
                     Lib = new Library(Config.ExpandedLibraryPath);
@@ -89,6 +90,8 @@ namespace VoiceVector.Win
                     MainWin.Show();
                     Diag.Breadcrumb("activated");
 
+                    MaybeOfferInstall();
+
                     // E2E seam: self-trigger one dictation for runners where
                     // synthesized keyboard input doesn't reach hooks.
                     int delayMs;
@@ -105,6 +108,36 @@ namespace VoiceVector.Win
             {
                 Diag.WriteCrashLog(e);
                 throw;
+            }
+        }
+
+        /// <summary>First run from outside the install folder: offer to copy
+        /// the single exe into %LOCALAPPDATA%\\Programs with a Start Menu
+        /// shortcut. User-land only; declining keeps the portable run.</summary>
+        private static void MaybeOfferInstall()
+        {
+            if (!InstallService.ShouldOfferInstall) return;
+            var result = System.Windows.MessageBox.Show(MainWin,
+                "Install VoiceVector for your user?\n\n" +
+                "\u2022 Copies the app to " + InstallService.InstallDir + "\n" +
+                "\u2022 Adds a Start Menu shortcut\n" +
+                "\u2022 Starts with Windows (changeable in Settings)\n\n" +
+                "No admin rights needed. Choose No to keep running this copy as-is.",
+                "Install VoiceVector", System.Windows.MessageBoxButton.YesNoCancel,
+                System.Windows.MessageBoxImage.Question);
+            if (result == System.Windows.MessageBoxResult.Yes)
+            {
+                if (InstallService.Install())
+                {
+                    Program.Hook.Stop();
+                    Application.Current.Shutdown();
+                    Environment.Exit(0);
+                }
+                // Install failed — keep running the portable copy.
+            }
+            else if (result == System.Windows.MessageBoxResult.Cancel)
+            {
+                InstallService.DismissOffer();
             }
         }
 

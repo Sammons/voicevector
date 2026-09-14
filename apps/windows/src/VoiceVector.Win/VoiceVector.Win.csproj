@@ -11,7 +11,13 @@
     <AssemblyName>VoiceVector</AssemblyName>
     <RootNamespace>VoiceVector.Win</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
-    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <!-- net48 SDK-style defaults this to true, which emits a
+         VoiceVector.exe.config full of binding redirects. All references
+         are GAC assemblies — no redirects needed — so the exe ships alone. -->
+    <AutoGenerateBindingRedirects>false</AutoGenerateBindingRedirects>
+    <GenerateBindingRedirectsOutputType>false</GenerateBindingRedirectsOutputType>
+    <GenerateSupportedRuntime>false</GenerateSupportedRuntime>
+    <ApplicationIcon>App.ico</ApplicationIcon>
     <Prefer32Bit>false</Prefer32Bit>
     <!-- Compile-check from non-Windows hosts (reference assemblies only). -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
@@ -23,6 +29,8 @@
   <ItemGroup>
     <Reference Include="System.Net.Http" />
     <Reference Include="System.Security" />
-    <Reference Include="System.IO.Compression.FileSystem" />
+  </ItemGroup>
+  <ItemGroup>
+    <Resource Include="App.ico" />
   </ItemGroup>
 </Project>

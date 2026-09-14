@@ -160,7 +160,7 @@ namespace VoiceVector.Win.Services
     public static class UpdateService
     {
         private const string Repo = "Sammons/voicevector";
-        private const string AssetName = "VoiceVector-windows-x64.zip";
+        private const string AssetName = "VoiceVector-windows-x64.exe";
 
         public static string CurrentVersion
         {
@@ -236,24 +236,18 @@ namespace VoiceVector.Win.Services
         public static async System.Threading.Tasks.Task DownloadAndInstallAsync(UpdateInfo info)
         {
             var exePath = Process.GetCurrentProcess().MainModule.FileName;
-            var installDir = Path.GetDirectoryName(exePath);
             var workDir = Path.Combine(Path.GetTempPath(), "vv-update-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(workDir);
 
-            var zipPath = Path.Combine(workDir, AssetName);
+            var newExe = Path.Combine(workDir, AssetName);
             using (var response = await ProviderClient.Http.GetAsync(info.AssetUrl).ConfigureAwait(false))
             {
                 response.EnsureSuccessStatusCode();
-                using (var file = File.Create(zipPath))
+                using (var file = File.Create(newExe))
                 {
                     await response.Content.CopyToAsync(file).ConfigureAwait(false);
                 }
             }
-
-            var newDir = Path.Combine(workDir, "new");
-            System.IO.Compression.ZipFile.ExtractToDirectory(zipPath, newDir);
-            if (!File.Exists(Path.Combine(newDir, "VoiceVector.exe")))
-                throw new InvalidOperationException("Downloaded update did not contain VoiceVector.exe.");
 
             int pid = Process.GetCurrentProcess().Id;
             var script = Path.Combine(workDir, "update.cmd");
@@ -261,7 +255,7 @@ namespace VoiceVector.Win.Services
                 "@echo off\r\n" +
                 ":wait\r\n" +
                 "tasklist /FI \"PID eq " + pid + "\" 2>nul | find \"" + pid + "\" >nul && (timeout /t 1 /nobreak >nul & goto wait)\r\n" +
-                "copy /y \"" + Path.Combine(newDir, "VoiceVector.exe") + "\" \"" + exePath + "\" >nul\r\n" +
+                "copy /y \"" + newExe + "\" \"" + exePath + "\" >nul\r\n" +
                 "start \"\" \"" + exePath + "\"\r\n" +
                 "rd /s /q \"" + workDir + "\"\r\n");
 

@@ -37,6 +37,12 @@ namespace VoiceVector.Win
             Height = 680;
             MinWidth = 560;
             MinHeight = 480;
+            Icon = Theme.AppIcon != null
+                ? System.Windows.Interop.Imaging.CreateBitmapSourceFromHIcon(
+                    Theme.AppIcon.Handle,
+                    System.Windows.Int32Rect.Empty,
+                    System.Windows.Media.Imaging.BitmapSizeOptions.FromWidthAndHeight(32, 32))
+                : null;
             Background = Theme.WindowBackground;
             FontFamily = Theme.UiFont;
             Theme.ApplyChrome(this);
@@ -194,7 +200,7 @@ namespace VoiceVector.Win
         {
             _tray = new System.Windows.Forms.NotifyIcon
             {
-                Icon = System.Drawing.SystemIcons.Application,
+                Icon = Theme.AppIcon,
                 Text = "VoiceVector",
                 Visible = true,
             };

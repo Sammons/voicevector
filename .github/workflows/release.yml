@@ -71,15 +71,15 @@ jobs:
           files-folder-filter: exe
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
-      - name: Zip
+      - name: Download to release asset (single signed exe)
         shell: pwsh
-        run: Compress-Archive -Path apps/windows/src/VoiceVector.Win/bin/Release/net48/VoiceVector.exe, apps/windows/src/VoiceVector.Win/bin/Release/net48/VoiceVector.exe.config -DestinationPath VoiceVector-windows-x64.zip
+        run: Copy-Item apps/windows/src/VoiceVector.Win/bin/Release/net48/VoiceVector.exe VoiceVector-windows-x64.exe
       - name: Upload to release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload "$env:GITHUB_REF_NAME" VoiceVector-windows-x64.zip --clobber
+          gh release upload "$env:GITHUB_REF_NAME" VoiceVector-windows-x64.exe --clobber
 
   linux:
     name: Release Linux (x86_64)

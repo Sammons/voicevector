@@ -9,7 +9,13 @@ macos-test:
 
 # Windows targets run on a Windows machine (dotnet 9 SDK, no admin needed).
 windows:
-	cd apps/windows && dotnet publish src/VoiceVector.App -c Release -r win-x64 -p:Platform=x64 --self-contained
+	cd apps/windows && dotnet build src/VoiceVector.Win -c Release
+
+# Compile-check the WPF app from any host (Docker or CI Linux). Reference
+# assemblies only — no Windows required.
+windows-compile-check:
+	docker compose -f compose.dotnet.yml run --rm dotnet sh -c \
+	  'dotnet build apps/windows/src/VoiceVector.Win -c Release -p:EnableWindowsTargeting=true'
 
 # Core logic self-test runs anywhere dotnet runs (including this repo's CI/Linux).
 windows-test:
