@@ -4,6 +4,23 @@ All notable changes to VoiceVector. Each release's entry doubles as its
 GitHub release notes. Versions follow [semantic versioning](https://semver.org);
 all three apps share one version number.
 
+## v0.6.3 — 2026-09-18
+
+Two hotfixes from user testing of v0.6.2:
+
+- **Windows: dropdowns were dead.** Every ComboBox in v0.6.2 (the
+  "Add provider…" picker, STT/cleanup/review/router provider pickers, hotkey
+  mode, the library folder picker) ignored clicks: the Fluent template drew
+  its invisible open/close button *underneath* the opaque face, so the face
+  swallowed every click. The button now sits on top and the dropdowns open.
+- **macOS: "Update & Relaunch" never quit the app.** The updater staged the
+  new build, then asked AppKit to terminate while the Settings sheet was
+  still open — and AppKit silently defers termination behind a SwiftUI
+  sheet, so the app sat there until force-quit. Settings now closes before
+  the quit, the app exits directly if AppKit still balks, the swap script
+  stops waiting after 20 s and quits the app itself, and updating is refused
+  while a dictation is in flight.
+
 ## v0.6.2 — 2026-09-14
 
 Windows delivery and polish, from user testing:
