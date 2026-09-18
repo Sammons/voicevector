@@ -511,20 +511,14 @@ namespace VoiceVector.Win
       <Setter.Value>
         <ControlTemplate TargetType=""ComboBox"">
           <Grid>
-            <ToggleButton x:Name=""ToggleButton"" Focusable=""False""
-                          ClickMode=""Press""
-                          IsChecked=""{Binding IsDropDownOpen, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}""
-                          Background=""Transparent"" BorderThickness=""0"">
-              <ToggleButton.Template>
-                <ControlTemplate TargetType=""ToggleButton"">
-                  <Border Background=""Transparent"" />
-                </ControlTemplate>
-              </ToggleButton.Template>
-            </ToggleButton>
+            <!-- Face first, then the transparent ToggleButton ON TOP of it:
+                 later Grid children win hit-testing, so clicks anywhere on
+                 the box reach the toggle and open the dropdown. With the
+                 toggle underneath the opaque face every ComboBox is dead. -->
             <Border x:Name=""Bd"" CornerRadius=""6"" BorderThickness=""1""
                     Background=""{TemplateBinding Background}""
                     BorderBrush=""{TemplateBinding BorderBrush}"">
-              <Grid>
+              <Grid IsHitTestVisible=""False"">
                 <Grid.ColumnDefinitions>
                   <ColumnDefinition Width=""*"" />
                   <ColumnDefinition Width=""26"" />
@@ -540,6 +534,16 @@ namespace VoiceVector.Win
                            VerticalAlignment=""Center"" HorizontalAlignment=""Center"" />
               </Grid>
             </Border>
+            <ToggleButton x:Name=""ToggleButton"" Focusable=""False""
+                          ClickMode=""Press""
+                          IsChecked=""{Binding IsDropDownOpen, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}""
+                          Background=""Transparent"" BorderThickness=""0"">
+              <ToggleButton.Template>
+                <ControlTemplate TargetType=""ToggleButton"">
+                  <Border Background=""Transparent"" />
+                </ControlTemplate>
+              </ToggleButton.Template>
+            </ToggleButton>
             <Popup x:Name=""PART_Popup"" IsOpen=""{TemplateBinding IsDropDownOpen}""
                    AllowsTransparency=""True"" Placement=""Bottom""
                    PopupAnimation=""Fade"" StaysOpen=""False"">

@@ -1046,6 +1046,7 @@ struct AboutSettings: View {
 
 /// One-click updates from GitHub Releases.
 struct UpdatesCard: View {
+    @EnvironmentObject var app: AppState
     @State private var available: UpdateInfo?
     @State private var status = ""
     @State private var busy = false
@@ -1107,6 +1108,14 @@ struct UpdatesCard: View {
     }
 
     private func install(_ info: UpdateInfo) {
+        // Relaunching mid-dictation would drop the in-flight entry (audio is
+        // safe on disk, but it wouldn't be saved as failed/retryable).
+        switch app.dictation.state {
+        case .idle, .failed: break
+        default:
+            status = "Finish the current dictation before updating."
+            return
+        }
         busy = true
         status = "Downloading \(info.version)…"
         Task { @MainActor in
@@ -1115,7 +1124,13 @@ struct UpdatesCard: View {
             } catch {
                 status = "Update failed: \(error.localizedDescription)"
                 busy = false
+                return
             }
+            // Close the Settings sheet first: with it open, NSApp.terminate
+            // is deferred indefinitely and the app never quits (v0.6.2 bug).
+            app.showSettings = false
+            try? await Task.sleep(for: .milliseconds(150))
+            UpdateService.relaunch()
         }
     }
 }

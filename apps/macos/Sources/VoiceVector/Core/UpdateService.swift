@@ -51,7 +51,9 @@ enum UpdateService {
         return false
     }
 
-    /// Downloads, verifies, swaps, and relaunches. Only returns on failure.
+    /// Downloads, verifies, and stages the swap: on return a detached script is
+    /// waiting for this process to exit, after which it replaces the bundle and
+    /// reopens it. The caller must then quit via `relaunch()`.
     @MainActor
     static func downloadAndInstall(_ info: UpdateInfo) async throws {
         let appURL = Bundle.main.bundleURL
@@ -78,11 +80,20 @@ enum UpdateService {
         // build (defends the download path even if the transport were subverted).
         try verifySignature(of: newApp)
 
-        // Swap after this process exits, then relaunch.
+        // Swap after this process exits, then relaunch. The wait is bounded:
+        // if the app is somehow still alive after 20 s the script quits it
+        // itself (TERM, then KILL), so an update can never leave the user
+        // force-quitting by hand.
         let pid = ProcessInfo.processInfo.processIdentifier
         let script = """
         #!/bin/sh
-        while kill -0 \(pid) 2>/dev/null; do sleep 0.2; done
+        n=0
+        while kill -0 \(pid) 2>/dev/null; do
+          n=$((n + 1))
+          [ "$n" -eq 100 ] && kill -TERM \(pid) 2>/dev/null
+          [ "$n" -eq 125 ] && kill -KILL \(pid) 2>/dev/null
+          sleep 0.2
+        done
         rm -rf "\(appURL.path)"
         /usr/bin/ditto "\(newApp.path)" "\(appURL.path)"
         /usr/bin/xattr -dr com.apple.quarantine "\(appURL.path)" 2>/dev/null
@@ -95,8 +106,22 @@ enum UpdateService {
         swapper.executableURL = URL(fileURLWithPath: "/bin/sh")
         swapper.arguments = [scriptURL.path]
         try swapper.run()
-        Log.info("Updating to \(info.version); relaunching")
+        Log.info("Updating to \(info.version); swapper staged, relaunching")
+    }
+
+    /// Quit so the staged swapper can replace the bundle and reopen it.
+    ///
+    /// `NSApp.terminate` is silently deferred while a SwiftUI `.sheet` is
+    /// presented (AppKit waits for the sheet's modal session to end, which it
+    /// never does), and the updater lives in the Settings sheet — so callers
+    /// dismiss Settings and yield to the run loop before calling this. If
+    /// terminate still returns, exit directly: nothing needs flushing, config
+    /// saves are synchronous and the swapper only starts once this pid is gone.
+    @MainActor
+    static func relaunch() -> Never {
         NSApp.terminate(nil)
+        Log.error("NSApp.terminate returned during update; exiting directly")
+        exit(0)
     }
 
     /// Requires a valid signature whose team matches the running app's team.
