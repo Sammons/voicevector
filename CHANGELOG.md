@@ -4,6 +4,18 @@ All notable changes to VoiceVector. Each release's entry doubles as its
 GitHub release notes. Versions follow [semantic versioning](https://semver.org);
 all three apps share one version number.
 
+## v0.6.4 — 2026-09-19
+
+Windows hotfix:
+
+- **"Update & Restart" threw a threading error.** After downloading
+  the new exe the updater asked WPF to shut down from a background thread
+  ("The calling thread cannot access this object because a different thread
+  owns it"), so the app stayed open with the swap script waiting on it. The
+  shutdown is now marshalled to the UI thread, and the swap script stops
+  waiting after 20 s and closes the app itself, mirroring the macOS fix in
+  v0.6.3.
+
 ## v0.6.3 — 2026-09-18
 
 Two hotfixes from user testing of v0.6.2:
