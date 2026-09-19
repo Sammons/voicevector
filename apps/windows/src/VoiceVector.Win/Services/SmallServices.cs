@@ -249,12 +249,21 @@ namespace VoiceVector.Win.Services
                 }
             }
 
+            // Wait for this process to exit, then swap and relaunch. The wait
+            // is bounded: after ~20 s the script kills the app itself, so an
+            // update can never leave the user closing the app by hand.
             int pid = Process.GetCurrentProcess().Id;
             var script = Path.Combine(workDir, "update.cmd");
             File.WriteAllText(script,
                 "@echo off\r\n" +
+                "set n=0\r\n" +
                 ":wait\r\n" +
-                "tasklist /FI \"PID eq " + pid + "\" 2>nul | find \"" + pid + "\" >nul && (timeout /t 1 /nobreak >nul & goto wait)\r\n" +
+                "tasklist /FI \"PID eq " + pid + "\" 2>nul | find \"" + pid + "\" >nul || goto swap\r\n" +
+                "set /a n+=1\r\n" +
+                "if %n% geq 20 taskkill /f /pid " + pid + " >nul 2>&1\r\n" +
+                "timeout /t 1 /nobreak >nul\r\n" +
+                "goto wait\r\n" +
+                ":swap\r\n" +
                 "copy /y \"" + newExe + "\" \"" + exePath + "\" >nul\r\n" +
                 "start \"\" \"" + exePath + "\"\r\n" +
                 "rd /s /q \"" + workDir + "\"\r\n");
@@ -265,7 +274,17 @@ namespace VoiceVector.Win.Services
                 UseShellExecute = false,
                 WorkingDirectory = Path.GetTempPath(),
             });
-            System.Windows.Application.Current.Shutdown();
+
+            // The awaits above use ConfigureAwait(false), so this runs on a
+            // thread-pool thread; Application.Shutdown is UI-thread-only
+            // ("The calling thread cannot access this object because a
+            // different thread owns it" in v0.6.3). Marshal it back.
+            var app = System.Windows.Application.Current;
+            if (app == null) { Environment.Exit(0); return; }
+            // Shutdown takes effect once the dispatcher unwinds; if anything
+            // keeps the process alive, the script's taskkill finishes the job.
+            // Nothing to flush: the exe swap happens after we're gone.
+            await app.Dispatcher.InvokeAsync(new Action(app.Shutdown));
         }
     }
 }
