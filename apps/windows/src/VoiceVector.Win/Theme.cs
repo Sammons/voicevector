@@ -270,11 +270,9 @@ namespace VoiceVector.Win
                 FontFamily = mono ? MonoFont : UiFont,
                 FontSize = 13,
                 Padding = new Thickness(8, 6, 8, 6),
-                Background = IsDark ? new SolidColorBrush(Color.FromArgb(255, 30, 28, 40))
-                                    : Brushes.White,
-                Foreground = TextPrimary,
-                BorderBrush = Divider,
-                CaretBrush = TextPrimary,
+                // Brushes come from the implicit TextBox style: a local
+                // BorderBrush would outrank the template's focus trigger and
+                // the field would never show the accent ring.
             };
         }
 

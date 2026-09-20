@@ -31,6 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if state.accessibilityGranted {
             state.hotkey.start()
         }
+        state.dictation.reconcileOrphanedAudio()
         setUpPeering()
         showWindow()
 
@@ -78,6 +79,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             root = AnyView(WizardView().environmentObject(state))
         }
+        // A presented Settings sheet belongs to the old hosting view; end it
+        // before swapping so it can't be orphaned over the new content.
+        if let sheet = window.attachedSheet { window.endSheet(sheet) }
         window.contentView = NSHostingView(rootView: root)
     }
 
@@ -167,7 +171,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let cancel = alert.addButton(withTitle: "Cancel")
         pair.keyEquivalent = ""          // not the default; deliberate click required
         cancel.keyEquivalent = "\r"
-        alert.beginSheetModal(for: window) { response in
+        // If Settings (a SwiftUI sheet) is up, attach to it: a second sheet on
+        // the main window would be queued until Settings closes, and the peer's
+        // pairing request would time out unseen.
+        alert.beginSheetModal(for: window.attachedSheet ?? window) { response in
             answer(response == .alertFirstButtonReturn)
         }
     }
@@ -192,8 +199,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsItem.target = self
         menu.addItem(settingsItem)
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Quit VoiceVector", action: #selector(NSApplication.terminate(_:)),
-                                keyEquivalent: "q"))
+        let quitItem = NSMenuItem(title: "Quit VoiceVector", action: #selector(quit), keyEquivalent: "q")
+        quitItem.target = self
+        menu.addItem(quitItem)
         menu.delegate = self
         statusItem.menu = menu
     }
@@ -226,6 +234,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openMain() { showWindow() }
 
+    /// Quit via a path that works while Settings is open: AppKit defers
+    /// `terminate:` behind a SwiftUI sheet indefinitely (the v0.6.2 updater
+    /// bug), so close the sheet, let the run loop turn, then terminate — and
+    /// exit directly if terminate still returns.
+    @objc private func quit() {
+        state.showSettings = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            NSApp.terminate(nil)
+            exit(0)
+        }
+    }
+
     @objc private func openSettings() {
         showWindow()
         state.showSettings = true
@@ -246,8 +266,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appMenu.addItem(NSMenuItem(title: "Hide VoiceVector", action: #selector(NSApplication.hide(_:)),
                                    keyEquivalent: "h"))
         appMenu.addItem(.separator())
-        appMenu.addItem(NSMenuItem(title: "Quit VoiceVector", action: #selector(NSApplication.terminate(_:)),
-                                   keyEquivalent: "q"))
+        let quitItem = NSMenuItem(title: "Quit VoiceVector", action: #selector(quit), keyEquivalent: "q")
+        quitItem.target = self
+        appMenu.addItem(quitItem)
         appMenuItem.submenu = appMenu
 
         let editMenuItem = NSMenuItem()

@@ -196,8 +196,14 @@ enum CleanupEngine {
         var providerID = config.cleanup.providerID
         var sttID = config.sttProviderID
         if let profile {
-            if let override = profile.cleanupProviderID { providerID = override }
-            if let override = profile.sttProviderID { sttID = override }
+            // An override only counts if it still resolves; a stale id (its
+            // provider was removed) falls back to the global default instead
+            // of silently disabling the stage.
+            func resolves(_ id: UUID?) -> Bool {
+                id.map { id in config.providers.contains { $0.id == id } } ?? false
+            }
+            if let override = profile.cleanupProviderID, resolves(override) { providerID = override }
+            if let override = profile.sttProviderID, resolves(override) { sttID = override }
             if !profile.customPrompt.trimmingCharacters(in: .whitespaces).isEmpty {
                 cleanupConfig.customPrompt = profile.customPrompt
             }

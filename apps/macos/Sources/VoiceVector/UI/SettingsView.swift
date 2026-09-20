@@ -226,6 +226,10 @@ struct ProviderEditor: View {
                         get: { app.config.sttProviderID == profile.id },
                         set: { app.config.sttProviderID = $0 ? profile.id : nil }
                     ))
+                    // The Dictation tab only lists providers with an STT model;
+                    // selecting one without a model would show an empty picker.
+                    .disabled(profile.sttModel.isEmpty)
+                    .help(profile.sttModel.isEmpty ? "Enter a transcription model first." : "")
                 }
                 if profile.kind.supportsChat {
                     Toggle("Cleanup", isOn: Binding(
@@ -383,9 +387,13 @@ struct DictationSettings: View {
 struct ProfileRow: View {
     @EnvironmentObject var app: AppState
     let index: Int
-    @State private var capturing = false
     @State private var showPrompt = false
     @State private var showVocabulary = false
+
+    private var profileID: UUID? {
+        index < app.config.dictationProfiles.count ? app.config.dictationProfiles[index].id : nil
+    }
+    private var capturing: Bool { profileID != nil && app.capturingProfileID == profileID }
 
     private var chatProviders: [ProviderProfile] {
         app.config.providers.filter { $0.kind.supportsChat && !$0.chatModel.isEmpty }
@@ -443,6 +451,10 @@ struct ProfileRow: View {
                             Text("\(p.name) — \(p.sttModel)").tag(Optional(p.id))
                         }
                     }
+                    // macOS menu Pickers keep an item's old title when only its
+                    // text changes (same tag), so the "Default (…)" entry went
+                    // stale after picking a global transcriber. Rebuild on change.
+                    .id(defaultSttLabel)
                     .frame(maxWidth: 330)
                     Button(showVocabulary ? "Hide vocabulary"
                            : (profile.vocabulary.isEmpty ? "Vocabulary…" : "Vocabulary (custom)…")) {
@@ -530,6 +542,7 @@ struct ProfileRow: View {
                                 Text("\(p.name) — \(p.chatModel)").tag(Optional(p.id))
                             }
                         }
+                        .id(defaultProviderLabel) // same stale-title workaround
                         .frame(maxWidth: 330)
                         Button(showPrompt ? "Hide prompt" : (profile.customPrompt.isEmpty ? "Prompt…" : "Prompt (custom)…")) {
                             showPrompt.toggle()
@@ -568,7 +581,7 @@ struct ProfileRow: View {
                     }
                 }
             }
-            .onDisappear { stopCapture() }
+            .onDisappear { if capturing { stopCapture() } }
         }
     }
 
@@ -630,21 +643,25 @@ struct ProfileRow: View {
             app.requestAccessibility()
             return
         }
-        capturing = true
-        let captureIndex = index
+        guard let id = profileID else { return }
+        // One owner: arming this row takes over any other row's capture.
+        app.capturingProfileID = id
         app.hotkey.onCaptureKey = { spec in
-            if captureIndex < app.config.dictationProfiles.count {
-                app.config.dictationProfiles[captureIndex].hotkey = spec
+            // By id, not index: rows can be deleted while we wait for a key.
+            if let i = app.config.dictationProfiles.firstIndex(where: { $0.id == id }) {
+                app.config.dictationProfiles[i].hotkey = spec
             }
             stopCapture()
         }
+        app.hotkey.onCaptureCancel = { stopCapture() }
         app.hotkey.captureMode = true
     }
 
     private func stopCapture() {
-        capturing = false
+        app.capturingProfileID = nil
         app.hotkey.captureMode = false
         app.hotkey.onCaptureKey = nil
+        app.hotkey.onCaptureCancel = nil
     }
 }
 

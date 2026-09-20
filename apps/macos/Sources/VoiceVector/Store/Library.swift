@@ -116,12 +116,48 @@ final class Library {
         return (id, folderURL(folder).appendingPathComponent(id + ".wav"))
     }
 
-    func save(_ entry: Entry) {
+    /// A recording whose pipeline never finished (quit, crash, force-kill,
+    /// updater) leaves a .wav with no .md: invisible in the library and not
+    /// retryable. Give each one a failed entry so it shows up with Retry.
+    /// Files younger than a minute are skipped (a recording may be in flight).
+    /// Returns how many were reconciled.
+    @discardableResult
+    func reconcileOrphanedAudio(olderThan age: TimeInterval = 60) -> Int {
+        var reconciled = 0
+        let fm = FileManager.default
+        for folder in folderNames() {
+            let dir = folderURL(folder)
+            let files = (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil,
+                                                     options: .skipsHiddenFiles)) ?? []
+            for wav in files where wav.pathExtension == "wav" {
+                let id = wav.deletingPathExtension().lastPathComponent
+                guard !fm.fileExists(atPath: dir.appendingPathComponent(id + ".md").path) else { continue }
+                let attrs = try? fm.attributesOfItem(atPath: wav.path)
+                let modified = attrs?[.modificationDate] as? Date ?? .distantPast
+                guard Date().timeIntervalSince(modified) >= age else { continue }
+                let bytes = attrs?[.size] as? Int ?? 0
+                let entry = Entry(id: id, folder: folder, date: modified,
+                                  duration: Double(max(0, bytes - 44)) / 32000.0, // 16 kHz mono 16-bit
+                                  sttLabel: "", cleanupLabel: "",
+                                  status: "error: interrupted before it was transcribed — retry",
+                                  cleaned: "", raw: "")
+                if save(entry) { reconciled += 1 }
+            }
+        }
+        return reconciled
+    }
+
+    /// Returns false when the transcript could not be written (the WAV is
+    /// still on disk); callers in the pipeline surface that loudly.
+    @discardableResult
+    func save(_ entry: Entry) -> Bool {
         let url = folderURL(entry.folder).appendingPathComponent(entry.markdownFilename)
         do {
             try Library.render(entry).write(to: url, atomically: true, encoding: .utf8)
+            return true
         } catch {
             Log.error("Failed to save transcript \(entry.id): \(error.localizedDescription)")
+            return false
         }
     }
 

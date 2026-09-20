@@ -38,17 +38,23 @@ enum UpdateService {
         return UpdateInfo(version: version, assetURL: assetURL)
     }
 
-    /// Semver-ish compare; a dev build is always update-eligible.
+    /// Semver-ish compare; a dev build is always update-eligible. A
+    /// pre-release suffix ("0.7.0-beta.1") is stripped before the numeric
+    /// compare and ranks below the same version's stable release.
     static func isNewer(_ candidate: String, than current: String) -> Bool {
         if current.hasSuffix("-dev") { return true }
-        let a = candidate.split(separator: ".").compactMap { Int($0) }
-        let b = current.split(separator: ".").compactMap { Int($0) }
-        for i in 0..<max(a.count, b.count) {
-            let x = i < a.count ? a[i] : 0
-            let y = i < b.count ? b[i] : 0
+        func parse(_ v: String) -> (numbers: [Int], prerelease: Bool) {
+            let parts = v.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
+            let numbers = parts[0].split(separator: ".").map { Int($0) ?? 0 }
+            return (numbers, parts.count > 1)
+        }
+        let a = parse(candidate), b = parse(current)
+        for i in 0..<max(a.numbers.count, b.numbers.count) {
+            let x = i < a.numbers.count ? a.numbers[i] : 0
+            let y = i < b.numbers.count ? b.numbers[i] : 0
             if x != y { return x > y }
         }
-        return false
+        return b.prerelease && !a.prerelease
     }
 
     /// Downloads, verifies, and stages the swap: on return a detached script is
@@ -60,6 +66,14 @@ enum UpdateService {
         guard appURL.pathExtension == "app" else {
             throw NSError(domain: "VoiceVector", code: 10, userInfo: [
                 NSLocalizedDescriptionKey: "Not running from an app bundle — update manually.",
+            ])
+        }
+
+        // App Translocation mounts a quarantined app read-only at a random
+        // path; the swap would silently fail and relaunch the old copy.
+        if appURL.path.contains("/AppTranslocation/") {
+            throw NSError(domain: "VoiceVector", code: 16, userInfo: [
+                NSLocalizedDescriptionKey: "macOS is running VoiceVector from a quarantined location. Move it to Applications, relaunch, then update.",
             ])
         }
 
@@ -84,9 +98,15 @@ enum UpdateService {
         // if the app is somehow still alive after 20 s the script quits it
         // itself (TERM, then KILL), so an update can never leave the user
         // force-quitting by hand.
+        // Copy first, then swap with a rollback: the old bundle is only
+        // removed once the new one is in place, so a failed copy (disk full,
+        // permissions) leaves the installed app intact.
         let pid = ProcessInfo.processInfo.processIdentifier
         let script = """
         #!/bin/sh
+        app=\(shellQuote(appURL.path))
+        new=\(shellQuote(newApp.path))
+        work=\(shellQuote(workDir.path))
         n=0
         while kill -0 \(pid) 2>/dev/null; do
           n=$((n + 1))
@@ -94,11 +114,16 @@ enum UpdateService {
           [ "$n" -eq 125 ] && kill -KILL \(pid) 2>/dev/null
           sleep 0.2
         done
-        rm -rf "\(appURL.path)"
-        /usr/bin/ditto "\(newApp.path)" "\(appURL.path)"
-        /usr/bin/xattr -dr com.apple.quarantine "\(appURL.path)" 2>/dev/null
-        /usr/bin/open "\(appURL.path)"
-        rm -rf "\(workDir.path)"
+        rm -rf "$app.new" "$app.old"
+        if /usr/bin/ditto "$new" "$app.new"; then
+          if mv "$app" "$app.old"; then
+            if mv "$app.new" "$app"; then rm -rf "$app.old"; else mv "$app.old" "$app"; fi
+          fi
+          /usr/bin/xattr -dr com.apple.quarantine "$app" 2>/dev/null
+        fi
+        rm -rf "$app.new"
+        /usr/bin/open "$app"
+        rm -rf "$work"
         """
         let scriptURL = workDir.appendingPathComponent("update.sh")
         try script.write(to: scriptURL, atomically: true, encoding: .utf8)
@@ -122,6 +147,11 @@ enum UpdateService {
         NSApp.terminate(nil)
         Log.error("NSApp.terminate returned during update; exiting directly")
         exit(0)
+    }
+
+    /// Single-quote a path for /bin/sh so spaces, quotes and `$` are literal.
+    private static func shellQuote(_ path: String) -> String {
+        "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     /// Requires a valid signature whose team matches the running app's team.

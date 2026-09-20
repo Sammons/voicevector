@@ -145,6 +145,16 @@ enum SelfTest {
         try? library.createFolder("Work Notes")
         expect(library.folderNames() == ["Inbox", "Work Notes"], "library: folder created")
 
+        // An orphaned .wav (pipeline interrupted) becomes a failed, retryable entry.
+        let orphan = library.newEntrySlot(folder: "Work Notes")
+        try? Data(count: 44 + 32000 * 3).write(to: orphan.audioURL)   // 3 s of silence
+        expect(library.reconcileOrphanedAudio(olderThan: 0) == 1, "library: orphaned audio reconciled")
+        let orphanEntry = library.entry(folder: "Work Notes", id: orphan.id)
+        expect(orphanEntry?.status.hasPrefix("error") == true
+               && abs((orphanEntry?.duration ?? 0) - 3) < 0.01,
+               "library: orphan entry is an error with the WAV's duration")
+        expect(library.reconcileOrphanedAudio(olderThan: 0) == 0, "library: reconcile is idempotent")
+
         let slot = library.newEntrySlot(folder: "Inbox")
         var entry = Entry(id: slot.id, folder: "Inbox", date: Date(), duration: 1,
                           sttLabel: "t", cleanupLabel: "", status: "complete",
@@ -354,6 +364,15 @@ enum SelfTest {
         expect(defPolicy.provider?.id == defaultProv.id
                && defPolicy.config.customPrompt.isEmpty,
                "profiles: default profile inherits globals")
+        var staleProfile = DictationProfile(name: "Stale", hotkey: .default)
+        staleProfile.cleanupProviderID = UUID()   // provider since removed
+        staleProfile.sttProviderID = UUID()
+        let stalePolicy = CleanupEngine.effective(profile: staleProfile, config: profCfg)
+        expect(stalePolicy.provider?.id == defaultProv.id,
+               "profiles: dangling provider override falls back to the global default")
+        expect(stalePolicy.stt?.id == profCfg.sttProviderID
+               || (profCfg.sttProviderID == nil && stalePolicy.stt == nil),
+               "profiles: dangling STT override falls back to the global default")
         let roundTrip = try? JSONDecoder().decode(AppConfig.self,
                                                   from: JSONEncoder().encode(profCfg))
         expect(roundTrip?.dictationProfiles.count == 3
@@ -416,6 +435,10 @@ enum SelfTest {
         // Update version comparison
         expect(UpdateService.isNewer("0.2.0", than: "0.1.0"), "update: newer minor")
         expect(UpdateService.isNewer("1.0.0", than: "0.9.9"), "update: newer major")
+        expect(UpdateService.isNewer("0.6.4", than: "0.6.4-beta.1"), "update: stable supersedes its pre-release")
+        expect(!UpdateService.isNewer("0.6.3", than: "0.6.4-beta.1"), "update: pre-release is not downgraded")
+        expect(!UpdateService.isNewer("0.7.0-rc.1", than: "0.7.0"), "update: pre-release never replaces stable")
+        expect(UpdateService.isNewer("0.7.0", than: "0.6.9"), "update: minor rollover")
         expect(!UpdateService.isNewer("0.1.0", than: "0.1.0"), "update: equal is not newer")
         expect(!UpdateService.isNewer("0.1.0", than: "0.1.1"), "update: older is not newer")
         expect(UpdateService.isNewer("0.1.0", than: "0.0.0-dev"), "update: dev builds always eligible")

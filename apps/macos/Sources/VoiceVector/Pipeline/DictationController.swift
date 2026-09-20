@@ -182,7 +182,9 @@ final class DictationController: ObservableObject {
                     self.currentSlot = nil
                     self.state = .failed("Could not start recording: \(error.localizedDescription)")
                 } else {
-                    self.state = .failed("Could not start recording: \(error.localizedDescription)")
+                    // A newer recording is already live; don't clobber its state.
+                    Log.error("Recorder start failed for a superseded recording: \(error.localizedDescription)")
+                    return
                 }
                 Chime.shared.playError()
             } else if self.state == .recording, self.currentSlot?.id == slotID,
@@ -217,6 +219,7 @@ final class DictationController: ObservableObject {
     func discardRecording() {
         guard state == .recording else { return }
         recorder.discard()
+        cancelPendingSegments()
         if let slot = currentSlot, review == nil || commandSlot == nil {
             library.deleteScreenshots(id: slot.id, folder: slot.folder)
             pendingScreenshots = nil
@@ -228,6 +231,16 @@ final class DictationController: ObservableObject {
         } else {
             state = .idle
         }
+    }
+
+    /// Streamed segments belong to the recording that produced them; drop and
+    /// cancel any left over so a discarded take can't leak into a later retry.
+    private func cancelPendingSegments() {
+        segmentLock.lock()
+        let tasks = segmentTasks
+        segmentTasks = []
+        segmentLock.unlock()
+        tasks.forEach { $0.cancel() }
     }
 
     // MARK: Review session (staged draft, spoken revisions)
@@ -605,8 +618,8 @@ final class DictationController: ObservableObject {
 
     private func process(slot: (id: String, audioURL: URL, folder: String),
                          duration: Double, config: AppConfig, tailStartByte: UInt32 = 0,
-                         profileID: UUID? = nil) async {
-        var entry = Entry(id: slot.id, folder: slot.folder, date: Date(), duration: duration,
+                         profileID: UUID? = nil, date: Date = Date()) async {
+        var entry = Entry(id: slot.id, folder: slot.folder, date: date, duration: duration,
                           sttLabel: "", cleanupLabel: "", status: "complete", cleaned: "", raw: "")
         entry.attach(pendingScreenshots)
 
@@ -725,7 +738,10 @@ final class DictationController: ObservableObject {
         }
         } // end two-pass pipeline
 
-        library.save(entry)
+        if !library.save(entry) {
+            notify(title: "Transcript not saved",
+                   body: "Could not write to the library folder (\(slot.folder)). The audio is kept; check the folder in Settings → Folders.")
+        }
         libraryGeneration += 1
 
         // Staged review: hold the draft in the HUD until ⏎ / Esc.
@@ -773,6 +789,11 @@ final class DictationController: ObservableObject {
         }
     }
 
+    /// Launch-time sweep for recordings whose pipeline never finished.
+    func reconcileOrphanedAudio() {
+        if library.reconcileOrphanedAudio() > 0 { libraryGeneration += 1 }
+    }
+
     // MARK: Retry from the library list
 
     func retry(entry: Entry) {
@@ -783,9 +804,11 @@ final class DictationController: ObservableObject {
         let config = configStore.config
         // Reuse the screenshots saved with the entry; the screen has moved on.
         pendingScreenshots = library.loadScreenshots(entry)
+        cancelPendingSegments()
         Task {
+            // Keep the original date: a retry re-transcribes the same dictation.
             await self.process(slot: (entry.id, audioURL, entry.folder),
-                               duration: entry.duration, config: config)
+                               duration: entry.duration, config: config, date: entry.date)
         }
     }
 

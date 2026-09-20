@@ -109,6 +109,14 @@ namespace VoiceVector.Win
                 Program.Config.Providers.RemoveAll(p => p.Id == profile.Id);
                 if (Program.Config.SttProviderId == profile.Id) Program.Config.SttProviderId = null;
                 if (Program.Config.Cleanup.ProviderId == profile.Id) Program.Config.Cleanup.ProviderId = null;
+                // Per-hotkey overrides pointing at it revert to "Default".
+                foreach (var dp in Program.Config.DictationProfiles)
+                {
+                    if (dp.SttProviderId == profile.Id) dp.SttProviderId = null;
+                    if (dp.CleanupProviderId == profile.Id) dp.CleanupProviderId = null;
+                    if (dp.ReviewProviderId == profile.Id) dp.ReviewProviderId = null;
+                    if (dp.RouterProviderId == profile.Id) dp.RouterProviderId = null;
+                }
                 Program.Config.Save();
                 owner.RefreshContent();
             };
@@ -140,8 +148,16 @@ namespace VoiceVector.Win
                 Foreground = Theme.TextPrimary,
                 BorderBrush = Theme.Divider,
             };
-            keyBox.PasswordChanged += (s, e) => KeyStore.SetApiKey(profile.Id, keyBox.Password);
+            var keyStatus = Theme.Text("", 11, secondary: true);
+            keyStatus.Foreground = Theme.Danger;
+            keyBox.PasswordChanged += (s, e) =>
+            {
+                // A silent DPAPI/disk failure here shows up later as HTTP 401.
+                keyStatus.Text = KeyStore.SetApiKey(profile.Id, keyBox.Password)
+                    ? "" : "Could not save the key (see Errors under General).";
+            };
             stack.Children.Add(Labeled("API key", keyBox));
+            stack.Children.Add(keyStatus);
 
             if (profile.Kind.SupportsTranscription())
                 stack.Children.Add(Labeled("STT model", MakeBound(profile.SttModel, v =>
@@ -231,6 +247,9 @@ namespace VoiceVector.Win
                 config.SttProviderId = sttBox.SelectedIndex <= 0
                     ? (Guid?)null : sttProviders[sttBox.SelectedIndex - 1].Id;
                 config.Save();
+                // The per-hotkey pickers below bake the default's name into
+                // their "Default transcriber (…)" entry; rebuild so they agree.
+                owner.RefreshContent();
             };
             stack.Children.Add(Labeled("Transcription provider", sttBox));
 
@@ -354,22 +373,30 @@ namespace VoiceVector.Win
                 capturing = !capturing;
                 if (capturing)
                 {
+                    // One capture at a time: arming this row disarms any other.
+                    Program.Hook.CancelCapture();
                     hotkeyButton.Content = "Press a key…";
                     Program.Hook.CaptureHandler = spec =>
                     {
                         profile.Hotkey = spec;
                         Program.Hook.CaptureHandler = null;
+                        Program.Hook.OnCaptureCancelled = null;
                         Program.Hook.Reconfigure();
                         config.Save();
                         capturing = false;
                         hotkeyButton.Content = KeyboardHook.Describe(spec);
                     };
+                    // Esc, another row arming, or the page being rebuilt.
+                    Program.Hook.OnCaptureCancelled = () =>
+                    {
+                        capturing = false;
+                        hotkeyButton.Content = profile.Hotkey.KeyCode == 0
+                            ? "Set hotkey…" : KeyboardHook.Describe(profile.Hotkey);
+                    };
                 }
                 else
                 {
-                    Program.Hook.CaptureHandler = null;
-                    hotkeyButton.Content = profile.Hotkey.KeyCode == 0
-                        ? "Set hotkey…" : KeyboardHook.Describe(profile.Hotkey);
+                    Program.Hook.CancelCapture();
                 }
             };
             top.Children.Add(hotkeyButton);
@@ -559,6 +586,7 @@ namespace VoiceVector.Win
             row.Children.Add(providerBox);
 
             bool isCustom = profile.CustomPrompt.Length > 0;
+            bool suppressPromptEvents = false;
             var promptLabel = Theme.Text(
                 isCustom ? "Cleanup prompt (custom for this hotkey)"
                          : "Cleanup prompt (built-in — any edit saves a custom prompt for this hotkey)",
@@ -574,7 +602,6 @@ namespace VoiceVector.Win
             promptBox.FontSize = 11.5;
             promptBox.Margin = new Thickness(22, 2, 0, 0);
             promptBox.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
-            promptBox.TextChanged += (s, e) => { profile.CustomPrompt = promptBox.Text; config.Save(); };
             var resetPrompt = Theme.MakeButton("Reset to built-in prompt");
             resetPrompt.Background = Brushes.Transparent;
             resetPrompt.BorderBrush = Brushes.Transparent;
@@ -600,11 +627,30 @@ namespace VoiceVector.Win
                 resetPrompt.Visibility = visibility == Visibility.Visible && profile.CustomPrompt.Length > 0
                     ? Visibility.Visible : Visibility.Collapsed;
             };
+            promptBox.TextChanged += (s, e) =>
+            {
+                if (suppressPromptEvents) return;
+                profile.CustomPrompt = promptBox.Text;
+                config.Save();
+                // The first edit makes it custom: say so and offer Reset now,
+                // not after the page is reopened.
+                promptLabel.Text = profile.CustomPrompt.Length > 0 ? "Cleanup prompt (custom for this hotkey)" : "Cleanup prompt (built-in — any edit saves a custom prompt for this hotkey)";
+                syncCleanupVisibility();
+            };
             modeBox.SelectionChanged += (s, e) =>
             {
                 profile.CleanupMode = (CleanupMode)modeBox.SelectedIndex;
                 profile.CleanupEnabled = profile.CleanupMode != CleanupMode.Off;
                 config.Save();
+                if (profile.CustomPrompt.Length == 0)
+                {
+                    // The built-in prompt follows the mode; editing the stale
+                    // one would save the wrong mode's prompt as custom.
+                    suppressPromptEvents = true;
+                    promptBox.Text = CleanupEngine.SystemPromptBase(
+                        CleanupEngine.Effective(profile, config).Config);
+                    suppressPromptEvents = false;
+                }
                 syncCleanupVisibility();
             };
             syncCleanupVisibility();

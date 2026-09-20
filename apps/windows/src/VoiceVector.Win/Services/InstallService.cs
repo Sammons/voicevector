@@ -178,7 +178,8 @@ namespace VoiceVector.Win.Services
             {
                 using (var key = Registry.CurrentUser.CreateSubKey(RunKey))
                 {
-                    if (enabled) key.SetValue(RunValue, InstalledExePath);
+                    // Quoted: the profile path usually contains a space.
+                    if (enabled) key.SetValue(RunValue, "\"" + InstalledExePath + "\"");
                     else key.DeleteValue(RunValue, throwOnMissingValue: false);
                 }
             }

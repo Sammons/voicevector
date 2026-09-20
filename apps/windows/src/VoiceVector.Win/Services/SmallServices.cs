@@ -68,23 +68,27 @@ namespace VoiceVector.Win.Services
             return Path.Combine(Dir, id.ToString("D"));
         }
 
-        public static void SetApiKey(Guid id, string key)
+        /// <summary>False when the key could not be persisted (the caller
+        /// tells the user; otherwise the failure only surfaces as a 401 later).</summary>
+        public static bool SetApiKey(Guid id, string key)
         {
             try
             {
                 if (string.IsNullOrEmpty(key))
                 {
                     File.Delete(PathFor(id));
-                    return;
+                    return true;
                 }
                 Directory.CreateDirectory(Dir);
                 var cipher = ProtectedData.Protect(Encoding.UTF8.GetBytes(key), null,
                                                    DataProtectionScope.CurrentUser);
                 File.WriteAllBytes(PathFor(id), cipher);
+                return true;
             }
             catch (Exception e)
             {
                 Log.Error("Key store write failed: " + e.Message);
+                return false;
             }
         }
 
@@ -218,19 +222,32 @@ namespace VoiceVector.Win.Services
             }
         }
 
+        /// <summary>Semver-ish compare; a dev build is always update-eligible.
+        /// A pre-release suffix ("0.7.0-beta.1") is stripped before the numeric
+        /// compare and ranks below the same version's stable release.</summary>
         public static bool IsNewer(string candidate, string current)
         {
             if (current.EndsWith("-dev")) return true;
-            var a = candidate.Split('.');
-            var b = current.Split('.');
+            bool aPre, bPre;
+            var a = SplitVersion(candidate, out aPre);
+            var b = SplitVersion(current, out bPre);
             for (int i = 0; i < Math.Max(a.Length, b.Length); i++)
             {
-                int x, y;
-                int.TryParse(i < a.Length ? a[i] : "0", out x);
-                int.TryParse(i < b.Length ? b[i] : "0", out y);
+                int x = i < a.Length ? a[i] : 0;
+                int y = i < b.Length ? b[i] : 0;
                 if (x != y) return x > y;
             }
-            return false;
+            return bPre && !aPre;
+        }
+
+        private static int[] SplitVersion(string version, out bool prerelease)
+        {
+            int dash = version.IndexOf('-');
+            prerelease = dash >= 0;
+            var parts = (dash >= 0 ? version.Substring(0, dash) : version).Split('.');
+            var numbers = new int[parts.Length];
+            for (int i = 0; i < parts.Length; i++) int.TryParse(parts[i], out numbers[i]);
+            return numbers;
         }
 
         public static async System.Threading.Tasks.Task DownloadAndInstallAsync(UpdateInfo info)
@@ -252,19 +269,31 @@ namespace VoiceVector.Win.Services
             // Wait for this process to exit, then swap and relaunch. The wait
             // is bounded: after ~20 s the script kills the app itself, so an
             // update can never leave the user closing the app by hand.
+            // Match on PID *and* image name so a recycled PID can't keep the
+            // loop waiting (or get taskkilled); retry the copy for a few seconds
+            // in case the old exe is still mapped (AV scan), and relaunch the
+            // old exe rather than nothing if the copy never succeeds.
             int pid = Process.GetCurrentProcess().Id;
+            var exeName = Path.GetFileName(exePath);
             var script = Path.Combine(workDir, "update.cmd");
             File.WriteAllText(script,
                 "@echo off\r\n" +
                 "set n=0\r\n" +
                 ":wait\r\n" +
-                "tasklist /FI \"PID eq " + pid + "\" 2>nul | find \"" + pid + "\" >nul || goto swap\r\n" +
+                "tasklist /FI \"PID eq " + pid + "\" /FI \"IMAGENAME eq " + exeName + "\" 2>nul | find \"" + pid + "\" >nul || goto swap\r\n" +
                 "set /a n+=1\r\n" +
                 "if %n% geq 20 taskkill /f /pid " + pid + " >nul 2>&1\r\n" +
                 "timeout /t 1 /nobreak >nul\r\n" +
                 "goto wait\r\n" +
                 ":swap\r\n" +
-                "copy /y \"" + newExe + "\" \"" + exePath + "\" >nul\r\n" +
+                "set c=0\r\n" +
+                ":copy\r\n" +
+                "copy /y \"" + newExe + "\" \"" + exePath + "\" >nul && goto launch\r\n" +
+                "set /a c+=1\r\n" +
+                "if %c% geq 10 goto launch\r\n" +
+                "timeout /t 1 /nobreak >nul\r\n" +
+                "goto copy\r\n" +
+                ":launch\r\n" +
                 "start \"\" \"" + exePath + "\"\r\n" +
                 "rd /s /q \"" + workDir + "\"\r\n");
 

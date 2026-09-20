@@ -2,8 +2,11 @@
 
 Location: macOS `~/Library/Application Support/VoiceVector/config.json`;
 Windows `%APPDATA%\VoiceVector\config.json`. Pretty-printed, hand-editable.
-Decoding is tolerant: missing keys take defaults, unknown keys are ignored —
-adding fields must never reset a user's config.
+Decoding is tolerant: missing keys take defaults, unknown keys are ignored,
+unknown enum values fall back to their default — adding fields must never
+reset a user's config. If the file cannot be parsed at all (a hand-edit typo),
+the app renames it to `config.json.broken-<timestamp>` beside a fresh default
+config rather than overwriting it; writes are atomic (temp file + replace).
 
 ```jsonc
 {

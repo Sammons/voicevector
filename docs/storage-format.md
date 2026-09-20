@@ -27,6 +27,9 @@ audio: 20260825-161530.wav          # sibling file name
 stt: ElevenLabs/scribe_v2           # provider name/model
 cleanup: Vercel AI Gateway/openai/gpt-4o-mini   # omitted if cleanup never configured
 status: complete                    # "complete" | "error: <message>"
+                                    # A .wav with no .md (the app was quit or killed
+                                    # mid-pipeline) is given an "error: interrupted…"
+                                    # entry at the next launch so it can be retried.
 screenshots: 2                      # optional: number of <id>-screen-N.jpg files
 activeScreenshot: 1                 # optional: 1-based N of the display the text went into (absent = unknown)
 screenshotOutline: true             # optional: the target window is outlined in red in that image

@@ -57,6 +57,9 @@ struct ProviderProfile: Codable, Identifiable, Equatable {
     var sttModel: String
     var chatModel: String
 
+    /// Tolerant (rule 3): a missing or unknown field never fails the whole
+    /// config. Lives in the type body's shadow via an extension below so the
+    /// memberwise init survives.
     static func preset(_ kind: ProviderKind) -> ProviderProfile {
         switch kind {
         case .elevenLabs:
@@ -80,6 +83,42 @@ struct ProviderProfile: Codable, Identifiable, Equatable {
     }
 }
 
+extension ProviderKind {
+    /// Unknown kinds (written by a newer build) decode as OpenAI-compatible
+    /// rather than failing the whole config.
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = ProviderKind(rawValue: raw) ?? .openAICompatible
+    }
+}
+
+extension ProviderProfile {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let kind = try c.decodeIfPresent(ProviderKind.self, forKey: .kind) ?? .openAICompatible
+        self.init(id: try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID(),
+                  kind: kind,
+                  name: try c.decodeIfPresent(String.self, forKey: .name) ?? kind.displayName,
+                  baseURL: try c.decodeIfPresent(String.self, forKey: .baseURL) ?? kind.defaultBaseURL,
+                  sttModel: try c.decodeIfPresent(String.self, forKey: .sttModel) ?? "",
+                  chatModel: try c.decodeIfPresent(String.self, forKey: .chatModel) ?? "")
+    }
+}
+
+extension TapStartMode {
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = TapStartMode(rawValue: raw) ?? .doubleTap
+    }
+}
+
+extension CleanupMode {
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = CleanupMode(rawValue: raw) ?? .rich
+    }
+}
+
 // MARK: - Hotkey
 
 /// A recorded hotkey: either a modifier-only key (Right ⌥, Fn, …) tracked via
@@ -98,6 +137,16 @@ struct HotkeySpec: Codable, Equatable {
     /// must never match it (it would swallow plain A).
     static let unset = HotkeySpec(keyCode: 0, modifiers: 0, isModifierOnly: false)
     var isSet: Bool { self != HotkeySpec.unset }
+}
+
+extension HotkeySpec {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(keyCode: try c.decodeIfPresent(UInt16.self, forKey: .keyCode) ?? HotkeySpec.default.keyCode,
+                  modifiers: try c.decodeIfPresent(UInt64.self, forKey: .modifiers) ?? HotkeySpec.default.modifiers,
+                  isModifierOnly: try c.decodeIfPresent(Bool.self, forKey: .isModifierOnly)
+                      ?? HotkeySpec.default.isModifierOnly)
+    }
 }
 
 /// One hotkey + its cleanup policy. Anything not overridden inherits the
@@ -251,6 +300,15 @@ struct WebhookConfig: Codable, Equatable {
     var url: String = ""
     var includeAudio: Bool = false
     var enabled: Bool = false
+}
+
+extension WebhookConfig {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(url: try c.decodeIfPresent(String.self, forKey: .url) ?? "",
+                  includeAudio: try c.decodeIfPresent(Bool.self, forKey: .includeAudio) ?? false,
+                  enabled: try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? false)
+    }
 }
 
 // MARK: - Root config
@@ -415,11 +473,21 @@ final class ConfigStore {
 
     init(fileURL: URL = ConfigStore.defaultURL) {
         self.fileURL = fileURL
-        if let data = try? Data(contentsOf: fileURL),
-           let loaded = try? JSONDecoder().decode(AppConfig.self, from: data) {
-            config = loaded
-        } else {
+        guard let data = try? Data(contentsOf: fileURL) else {
             config = AppConfig()
+            return
+        }
+        do {
+            config = try JSONDecoder().decode(AppConfig.self, from: data)
+        } catch {
+            // Starting from defaults must not destroy the user's file — the
+            // first save would overwrite it. Keep it beside the fresh one.
+            config = AppConfig()
+            let stamp = ISO8601DateFormatter().string(from: Date())
+                .replacingOccurrences(of: ":", with: "-")
+            let backup = fileURL.appendingPathExtension("broken-\(stamp)")
+            try? FileManager.default.moveItem(at: fileURL, to: backup)
+            Log.error("config.json could not be read (\(error.localizedDescription)); kept it at \(backup.lastPathComponent) and started from defaults")
         }
     }
 

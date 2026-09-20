@@ -13,6 +13,9 @@ final class AppState: ObservableObject {
         didSet { persist(oldValue: oldValue) }
     }
     @Published var showSettings = false
+    /// The hotkey row currently in "Press a key…" (the engine's capture is
+    /// global, so at most one row may own it).
+    @Published var capturingProfileID: UUID?
     @Published var accessibilityGranted = AXIsProcessTrusted()
     @Published var microphoneGranted = Recorder.permissionGranted
     @Published var screenRecordingGranted = ScreenCapture.permissionGranted
@@ -86,5 +89,14 @@ final class AppState: ObservableObject {
         config.providers.removeAll { $0.id == profile.id }
         if config.sttProviderID == profile.id { config.sttProviderID = nil }
         if config.cleanup.providerID == profile.id { config.cleanup.providerID = nil }
+        // Per-hotkey overrides pointing at the removed provider revert to
+        // "Default"; otherwise the row renders a blank picker and the hotkey
+        // silently loses that stage.
+        for i in config.dictationProfiles.indices {
+            if config.dictationProfiles[i].sttProviderID == profile.id { config.dictationProfiles[i].sttProviderID = nil }
+            if config.dictationProfiles[i].cleanupProviderID == profile.id { config.dictationProfiles[i].cleanupProviderID = nil }
+            if config.dictationProfiles[i].reviewProviderID == profile.id { config.dictationProfiles[i].reviewProviderID = nil }
+            if config.dictationProfiles[i].routerProviderID == profile.id { config.dictationProfiles[i].routerProviderID = nil }
+        }
     }
 }

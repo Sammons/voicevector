@@ -14,11 +14,19 @@ namespace VoiceVector.Win
         public static KeyboardHook Hook;
         public static DictationController Dictation;
         public static MainWindow MainWin;
+        private static System.Threading.Mutex _instanceMutex;
 
         [STAThread]
         public static void Main()
         {
             Run();
+        }
+
+        private static bool HasTestEnvironment()
+        {
+            foreach (var key in Environment.GetEnvironmentVariables().Keys)
+                if (key.ToString().StartsWith("VV_", StringComparison.Ordinal)) return true;
+            return false;
         }
 
         private static int Run()
@@ -35,6 +43,19 @@ namespace VoiceVector.Win
                 System.Net.SecurityProtocolType.Tls12;
 
             Diag.Breadcrumb("Main start");
+            // One instance per session: autostart + a Start Menu click would
+            // otherwise run two copies, each with its own keyboard hook (double
+            // recordings, double pastes, two tray icons). Held for the process
+            // lifetime. Skipped under any VV_* env var (CI smoke/E2E relaunch
+            // the exe back-to-back), matching the install offer's convention.
+            bool firstInstance;
+            _instanceMutex = new System.Threading.Mutex(true, @"Local\VoiceVector.SingleInstance",
+                                                        out firstInstance);
+            if (!firstInstance && !HasTestEnvironment())
+            {
+                Diag.Breadcrumb("Another instance is running; exiting");
+                return 0;
+            }
             try
             {
                 var app = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
@@ -51,6 +72,7 @@ namespace VoiceVector.Win
                     Config = AppConfig.Load();
                     Config.Save(); // materialize config.json so it's discoverable
                     Lib = new Library(Config.ExpandedLibraryPath);
+                    Lib.ReconcileOrphanedAudio();
                     Hook = new KeyboardHook(() => Config, app.Dispatcher);
                     Dictation = new DictationController(() => Config, () => Lib, Hook,
                                                         app.Dispatcher);

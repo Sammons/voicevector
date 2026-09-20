@@ -180,9 +180,11 @@ namespace VoiceVector.Win
             if (draft != null)
             {
                 _draft.Text = draft;
-                _reviewHint.Text = (label == "Reviewing"
-                    ? "Press the hotkey and say a change"
-                    : label) + "      Enter: paste   Esc: discard";
+                // Enter/Esc only act on the draft while Reviewing; during a
+                // spoken change Esc cancels the recording and Enter is passed on.
+                _reviewHint.Text = label == "Reviewing"
+                    ? "Press the hotkey and say a change      Enter: paste   Esc: discard"
+                    : label;
                 _staging.Visibility = Visibility.Visible;
             }
             else

@@ -220,6 +220,7 @@ namespace VoiceVector.Win.Services
         {
             if (State != StateKind.Recording) return;
             Recorder.Discard();
+            ClearPendingSegments();
             if (_slot != null && (_review == null || _commandPath == null))
             {
                 _library().DeleteScreenshots(_slot.Value.Key, _slotFolder);
@@ -236,6 +237,14 @@ namespace VoiceVector.Win.Services
             {
                 SetState(StateKind.Idle, "");
             }
+        }
+
+        /// <summary>Streamed segments belong to the recording that produced
+        /// them; drop any left over so a discarded take can't leak into a later
+        /// retry.</summary>
+        private void ClearPendingSegments()
+        {
+            lock (_segmentLock) _segmentTasks.Clear();
         }
 
         // -- review session (staged draft, spoken revisions) -----------------------
@@ -616,19 +625,29 @@ namespace VoiceVector.Win.Services
             SetState(StateKind.Processing, "Transcribing…");
             // Reuse the screenshots saved with the entry; the screen has moved on.
             _pendingScreenshots = _library().LoadScreenshots(entry);
-            var _ = ProcessAsync(entry.Id, audioPath, entry.Folder, entry.Duration, 0, Guid.Empty);
+            ClearPendingSegments();
+            // Keep the original date: a retry re-transcribes the same dictation.
+            var _ = ProcessAsync(entry.Id, audioPath, entry.Folder, entry.Duration, 0, Guid.Empty,
+                                 entry.Date);
         }
 
         private async Task ProcessAsync(string id, string audioPath, string folder,
-                                        double duration, uint tailStartByte, Guid profileId)
+                                        double duration, uint tailStartByte, Guid profileId,
+                                        DateTimeOffset? date = null)
         {
             var config = _config();
             var library = _library();
             var entry = new Entry
             {
-                Id = id, Folder = folder, Date = DateTimeOffset.Now, Duration = duration,
+                Id = id, Folder = folder, Date = date ?? DateTimeOffset.Now, Duration = duration,
             };
             entry.Attach(_pendingScreenshots);
+            bool saved = false;
+            // Fire-and-forget from FinishRecording/Retry: anything escaping the
+            // stage-level handlers below would otherwise wedge the controller in
+            // Processing with the audio invisible (rule 5). Catch, persist, notify.
+            try
+            {
 
             var dictationProfile = config.DictationProfiles.FirstOrDefault(p => p.Id == profileId);
             var policy = CleanupEngine.Effective(dictationProfile, config);
@@ -792,6 +811,7 @@ namespace VoiceVector.Win.Services
             }
 
             library.Save(entry);
+            saved = true;
             RaiseLibraryChanged();
 
             // Staged review: hold the draft in the HUD until Enter / Esc.
@@ -802,6 +822,19 @@ namespace VoiceVector.Win.Services
             }
             await DeliverAsync(entry, audioPath, folder, config,
                                dictationProfile != null && dictationProfile.AutoSubmit).ConfigureAwait(false);
+            }
+            catch (Exception e)
+            {
+                Log.Error("Dictation pipeline failed: " + e);
+                if (!saved)
+                {
+                    entry.Status = "error: " + e.Message;
+                    try { library.Save(entry); }
+                    catch (Exception save) { Log.Error("Could not save the failed entry: " + save.Message); }
+                    RaiseLibraryChanged();
+                }
+                Fail("Dictation failed: " + e.Message);
+            }
         }
 
         /// <summary>3. Paste into the foreground app, then 4. webhook (fire and forget).</summary>
@@ -837,7 +870,12 @@ namespace VoiceVector.Win.Services
         private async Task ClearFailureLaterAsync()
         {
             await Task.Delay(5000).ConfigureAwait(false);
-            if (State == StateKind.Failed) SetState(StateKind.Idle, "");
+            // Read State on the dispatcher: a recording started just as the
+            // timer fires must not be flipped back to Idle.
+            await _dispatcher.InvokeAsync(() =>
+            {
+                if (State == StateKind.Failed) SetState(StateKind.Idle, "");
+            });
         }
 
         private void SetState(StateKind state, string detail)

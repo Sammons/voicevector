@@ -159,6 +159,15 @@ namespace VoiceVector.SelfTest
                 Expect(library.FolderNames().SequenceEqual(new[] { "Inbox", "Work Notes" }),
                        "library: folder created");
 
+                // An orphaned .wav (pipeline interrupted) becomes a failed, retryable entry.
+                var orphan = library.NewEntrySlot("Work Notes");
+                File.WriteAllBytes(orphan.Value, new byte[44 + 32000 * 3]);   // 3 s of silence
+                Expect(library.ReconcileOrphanedAudio(0) == 1, "library: orphaned audio reconciled");
+                var orphanEntry = library.GetEntry("Work Notes", orphan.Key);
+                Expect(orphanEntry != null && orphanEntry.IsError && Math.Abs(orphanEntry.Duration - 3) < 0.01,
+                       "library: orphan entry is an error with the WAV's duration");
+                Expect(library.ReconcileOrphanedAudio(0) == 0, "library: reconcile is idempotent");
+
                 var slot = library.NewEntrySlot("Inbox");
                 var entry = new Entry
                 {
@@ -270,6 +279,14 @@ namespace VoiceVector.SelfTest
             var defaults = CleanupEngine.Effective(new DictationProfile(), decoded);
             Expect(defaults.Enabled && defaults.Config.CustomPrompt == decoded.Cleanup.CustomPrompt,
                    "profiles: default profile inherits globals");
+            decoded.Cleanup.ProviderId = decoded.Providers[0].Id;
+            var stale = new DictationProfile { CleanupProviderId = Guid.NewGuid(), SttProviderId = Guid.NewGuid() };
+            var stalePolicy = CleanupEngine.Effective(stale, decoded);
+            Expect(stalePolicy.Provider != null && stalePolicy.Provider.Id == decoded.Providers[0].Id,
+                   "profiles: dangling provider override falls back to the global default");
+            Expect((decoded.SttProviderId == null && stalePolicy.Stt == null)
+                   || (stalePolicy.Stt != null && stalePolicy.Stt.Id == decoded.SttProviderId),
+                   "profiles: dangling STT override falls back to the global default");
             decoded.Cleanup.Mode = CleanupMode.Off;
             Expect(!CleanupEngine.Effective(new DictationProfile(), decoded).Enabled,
                    "profiles: legacy profile inherits global mode");

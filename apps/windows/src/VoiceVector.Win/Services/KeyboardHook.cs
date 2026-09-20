@@ -15,6 +15,19 @@ namespace VoiceVector.Win.Services
         /// <summary>(action, profileId) — the initiating profile decides cleanup.</summary>
         public event Action<TapStateMachine.Act, Guid> OnAction;
         public Action<HotkeySpec> CaptureHandler;
+        /// <summary>Runs (on the dispatcher) when a capture ends without a key:
+        /// Esc, or the UI that armed it was torn down.</summary>
+        public Action OnCaptureCancelled;
+
+        /// <summary>Disarm a pending "press a key…" capture. Safe to call when
+        /// none is armed.</summary>
+        public void CancelCapture()
+        {
+            var cancelled = OnCaptureCancelled;
+            CaptureHandler = null;
+            OnCaptureCancelled = null;
+            if (cancelled != null) cancelled();
+        }
         public bool RecordingActive;
         /// <summary>A draft is staged for review: Enter accepts, Esc discards
         /// (both swallowed so they never reach the app underneath).</summary>
@@ -68,6 +81,21 @@ namespace VoiceVector.Win.Services
 
         private IntPtr HookProc(int nCode, IntPtr wParam, IntPtr lParam)
         {
+            // An exception escaping a native callback is not routed through
+            // DispatcherUnhandledException — it terminates the process.
+            try
+            {
+                return HookProcCore(nCode, wParam, lParam);
+            }
+            catch (Exception e)
+            {
+                Log.Error("Keyboard hook: " + e.Message);
+                return Native.CallNextHookEx(_hook, nCode, wParam, lParam);
+            }
+        }
+
+        private IntPtr HookProcCore(int nCode, IntPtr wParam, IntPtr lParam)
+        {
             if (nCode < 0) return Native.CallNextHookEx(_hook, nCode, wParam, lParam);
 
             var info = (Native.KBDLLHOOKSTRUCT)Marshal.PtrToStructure(
@@ -93,6 +121,11 @@ namespace VoiceVector.Win.Services
                     _dispatcher.BeginInvoke((Action)(() => capture(spec)));
                     return (IntPtr)1;
                 }
+                if (isDown && vk == Native.VK_ESCAPE)
+                {
+                    _dispatcher.BeginInvoke((Action)CancelCapture);
+                    return (IntPtr)1;
+                }
                 return Native.CallNextHookEx(_hook, nCode, wParam, lParam);
             }
 
@@ -115,7 +148,8 @@ namespace VoiceVector.Win.Services
 
             // Try each profile's hotkey; an in-flight gesture only accepts
             // events from its initiating profile. First matching spec wins.
-            foreach (var profile in _config().DictationProfiles)
+            // Snapshot: the UI thread adds/removes profiles on this same list.
+            foreach (var profile in _config().DictationProfiles.ToArray())
             {
                 if (_machine.IsActive && _activeProfileId != profile.Id) continue;
                 var hotkey = profile.Hotkey;

@@ -81,6 +81,13 @@ namespace VoiceVector.Shared
         }
 
         /// <summary>Resolves a dictation profile against the global config.</summary>
+        private static bool Resolves(Guid? id, AppConfig config)
+        {
+            if (!id.HasValue) return false;
+            foreach (var p in config.Providers) if (p.Id == id.Value) return true;
+            return false;
+        }
+
         public static EffectiveCleanup Effective(DictationProfile profile, AppConfig config)
         {
             var cleanupConfig = new CleanupConfig
@@ -95,8 +102,13 @@ namespace VoiceVector.Shared
             Guid? sttId = config.SttProviderId;
             if (profile != null)
             {
-                if (profile.CleanupProviderId.HasValue) providerId = profile.CleanupProviderId;
-                if (profile.SttProviderId.HasValue) sttId = profile.SttProviderId;
+                // An override only counts if it still resolves; a stale id (its
+                // provider was removed) falls back to the global default instead
+                // of silently disabling the stage.
+                if (profile.CleanupProviderId.HasValue && Resolves(profile.CleanupProviderId, config))
+                    providerId = profile.CleanupProviderId;
+                if (profile.SttProviderId.HasValue && Resolves(profile.SttProviderId, config))
+                    sttId = profile.SttProviderId;
                 if (profile.CustomPrompt.Trim().Length > 0)
                     cleanupConfig.CustomPrompt = profile.CustomPrompt;
                 cleanupConfig.Vocabulary = MergeVocabulary(config.Cleanup.Vocabulary, profile.Vocabulary);

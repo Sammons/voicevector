@@ -72,6 +72,13 @@ namespace VoiceVector.Win.Services
 
         private static double Now { get { return Environment.TickCount / 1000.0; } }
 
+        /// <summary>Set once the capture thread has the device streaming, or
+        /// has given up; <see cref="_captureFailure"/> says which.</summary>
+        private readonly ManualResetEventSlim _captureReady = new ManualResetEventSlim(false);
+        private volatile string _captureFailure;
+
+        /// <summary>Throws when the microphone can't be opened, so the caller
+        /// can fail loudly instead of "recording" nothing (rule 5).</summary>
         public void Start(string wavPath)
         {
             if (_writer != null) return;
@@ -88,7 +95,18 @@ namespace VoiceVector.Win.Services
                 _lastSample = 0;
                 _writer = writer;
             }
-            EnsureCaptureThread();
+            if (EnsureCaptureThread())
+            {
+                // A fresh capture thread: wait for the device to open.
+                bool ready = _captureReady.Wait(3000);
+                var failure = _captureFailure;
+                if (!ready || failure != null)
+                {
+                    Discard();
+                    throw new InvalidOperationException(
+                        failure ?? "The microphone did not start within 3 seconds.");
+                }
+            }
         }
 
         public double Stop()
@@ -137,15 +155,20 @@ namespace VoiceVector.Win.Services
             if (timer != null) timer.Dispose();
         }
 
-        private void EnsureCaptureThread()
+        /// <summary>Returns true when a new capture thread was started (the
+        /// caller then waits for it to report the device state).</summary>
+        private bool EnsureCaptureThread()
         {
             var thread = _thread;
-            if (thread != null && thread.IsAlive && !_stopping) return;
+            if (thread != null && thread.IsAlive && !_stopping) return false;
             if (thread != null && thread.IsAlive) thread.Join(3000);
             _stopping = false;
+            _captureFailure = null;
+            _captureReady.Reset();
             _thread = new Thread(CaptureLoop) { IsBackground = true, Name = "vv-capture" };
             _thread.SetApartmentState(ApartmentState.MTA);
             _thread.Start();
+            return true;
         }
 
         private void StopCaptureThread()
@@ -211,6 +234,7 @@ namespace VoiceVector.Win.Services
                 Marshal.ThrowExceptionForHR(audioClient.GetService(ref iidCapture, out captureObj));
                 captureClient = (IAudioCaptureClient)captureObj;
                 Marshal.ThrowExceptionForHR(audioClient.Start());
+                _captureReady.Set(); // device streaming; Start() may return
 
                 int channels = format.nChannels;
                 double sourceRate = format.nSamplesPerSec;
@@ -254,6 +278,8 @@ namespace VoiceVector.Win.Services
                 ReleaseCom(device);
                 ReleaseCom(enumerator);
                 if (startError != null) Log.Error("Recorder: " + startError);
+                _captureFailure = startError;
+                _captureReady.Set(); // unblock Start() with the verdict
             }
         }
 

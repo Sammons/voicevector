@@ -70,6 +70,8 @@ struct HUDView: View {
         }
         .frame(width: 520, height: 480, alignment: .bottom)
         .onReceive(timer) { _ in
+            // The panel is ordered out when idle; don't re-render it 20×/s.
+            guard dictation.state != .idle else { return }
             tick += 1
             guard dictation.state == .recording else { return }
             var next = Array(bars.dropFirst())

@@ -21,6 +21,7 @@ namespace VoiceVector.Win
         private readonly Border _noticeBar;
         private readonly TextBlock _noticeText;
         private readonly ContentControl _content;
+        private ComboBox _folderBox;
         private HudWindow _hud;
         private System.Windows.Forms.NotifyIcon _tray;
         private bool _showingSettings;
@@ -88,7 +89,7 @@ namespace VoiceVector.Win
             if (uiLevel >= 5)
             {
                 Program.Dictation.StateChanged += OnDictationState;
-                Program.Dictation.LibraryChanged += RefreshContent;
+                Program.Dictation.LibraryChanged += RefreshLibrary;
                 Program.Dictation.Notice += m => ShowNotice(m, warning: true);
                 Closing += (s, e) =>
                 {
@@ -168,25 +169,24 @@ namespace VoiceVector.Win
                 Margin = new Thickness(20, 8, 20, 14),
             };
             footer.Children.Add(Theme.Text("New dictations go to", 12.5, secondary: true));
-            var folderBox = new ComboBox
+            _folderBox = new ComboBox
             {
                 Margin = new Thickness(10, 0, 10, 0),
                 MinWidth = 120,
                 FontFamily = Theme.UiFont,
                 VerticalAlignment = VerticalAlignment.Center,
             };
-            foreach (var name in Program.Lib.FolderNames()) folderBox.Items.Add(name);
-            folderBox.SelectedItem = Program.Config.ActiveFolder;
-            folderBox.SelectionChanged += (s, e) =>
+            RefreshFolderBox();
+            _folderBox.SelectionChanged += (s, e) =>
             {
-                var name = folderBox.SelectedItem as string;
-                if (name != null)
+                var name = _folderBox.SelectedItem as string;
+                if (name != null && name != Program.Config.ActiveFolder)
                 {
                     Program.Config.ActiveFolder = name;
                     Program.Config.Save();
                 }
             };
-            footer.Children.Add(folderBox);
+            footer.Children.Add(_folderBox);
             var newFolder = Theme.MakeButton("New Folder", icon: "");
             newFolder.Click += (s, e) => PromptNewFolder();
             footer.Children.Add(newFolder);
@@ -203,6 +203,12 @@ namespace VoiceVector.Win
                 Icon = Theme.AppIcon,
                 Text = "VoiceVector",
                 Visible = true,
+            };
+            // Shutdown() paths (updater, install hand-off) don't go through the
+            // Quit item; dispose here too or the shell keeps a ghost icon.
+            Application.Current.Exit += (s, e) =>
+            {
+                try { _tray.Visible = false; _tray.Dispose(); } catch { }
             };
             var menu = new System.Windows.Forms.ContextMenuStrip();
             menu.Items.Add("Start Dictation", null, (s, e) => Dispatcher.BeginInvoke(
@@ -287,8 +293,33 @@ namespace VoiceVector.Win
             _noticeBar.Visibility = Visibility.Visible;
         }
 
+        /// <summary>A dictation was saved/retried/deleted: redraw the library
+        /// if it's showing. Settings and the wizard are left alone so a
+        /// background dictation can't yank focus out of a field being edited.</summary>
+        private void RefreshLibrary()
+        {
+            OnDictationState();
+            RefreshFolderBox();
+            if (Program.Config.WizardCompleted && !_showingSettings) _content.Content = BuildLibrary();
+        }
+
+        /// <summary>The footer "New dictations go to" picker is built once with
+        /// the window; repopulate it whenever folders may have changed.</summary>
+        private void RefreshFolderBox()
+        {
+            if (_folderBox == null) return;
+            var active = Program.Config.ActiveFolder;
+            _folderBox.Items.Clear();
+            foreach (var name in Program.Lib.FolderNames()) _folderBox.Items.Add(name);
+            _folderBox.SelectedItem = active;
+        }
+
         public void RefreshContent()
         {
+            RefreshFolderBox();
+            // Any "Press a key…" capture belonged to the content being replaced;
+            // left armed, the next keystroke anywhere would become a hotkey.
+            if (Program.Hook != null) Program.Hook.CancelCapture(); // null at low VV_UI_LEVELs
             OnDictationState();
             if (!Program.Config.WizardCompleted) _content.Content = WizardUi.Build(this, _wizardStep);
             else if (_showingSettings) _content.Content = SettingsUi.Build(this);

@@ -518,7 +518,19 @@ namespace VoiceVector.Shared
             }
             catch (Exception e)
             {
+                // Starting from defaults must not destroy the user's file: the
+                // next Save() would overwrite it. Keep it beside a fresh one.
                 Log.Error("Config load failed, using defaults: " + e.Message);
+                try
+                {
+                    var backup = path + ".broken-" + DateTime.Now.ToString("yyyyMMdd-HHmmss");
+                    File.Move(path, backup);
+                    Log.Error("Unreadable config kept at " + backup);
+                }
+                catch (Exception move)
+                {
+                    Log.Error("Could not back up the unreadable config: " + move.Message);
+                }
             }
             return new AppConfig();
         }
@@ -529,7 +541,12 @@ namespace VoiceVector.Shared
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(path));
-                File.WriteAllText(path, Json.Write(ToJson(), indented: true));
+                // Atomic: a crash mid-write must not leave a truncated file
+                // (which would read as "broken" and reset everything).
+                var tmp = path + ".tmp";
+                File.WriteAllText(tmp, Json.Write(ToJson(), indented: true));
+                if (File.Exists(path)) File.Replace(tmp, path, null);
+                else File.Move(tmp, path);
             }
             catch (Exception e)
             {

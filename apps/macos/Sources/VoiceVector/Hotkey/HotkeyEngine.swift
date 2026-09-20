@@ -13,6 +13,8 @@ final class HotkeyEngine {
     var onAction: ((TapStateMachine.Action, UUID) -> Void)?
     /// Fires for any key press while capture mode is on (hotkey recorder UI).
     var onCaptureKey: ((HotkeySpec) -> Void)?
+    /// Esc during capture: the UI drops out of "Press a key…".
+    var onCaptureCancel: (() -> Void)?
 
     private(set) var profiles: [DictationProfile]
     private var machine: TapStateMachine
@@ -187,7 +189,10 @@ final class HotkeyEngine {
 
     private func handleCapture(type: CGEventType, event: CGEvent, keyCode: UInt16) -> Unmanaged<CGEvent>? {
         if type == .keyDown {
-            if keyCode == UInt16(kVK_Escape) { return nil } // reserved for cancel
+            if keyCode == UInt16(kVK_Escape) {
+                DispatchQueue.main.async { self.onCaptureCancel?() }
+                return nil
+            }
             let relevant: CGEventFlags = [.maskCommand, .maskAlternate, .maskControl, .maskShift, .maskSecondaryFn]
             let mods = event.flags.intersection(relevant).rawValue
             let captured = HotkeySpec(keyCode: keyCode, modifiers: mods, isModifierOnly: false)

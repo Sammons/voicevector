@@ -129,6 +129,40 @@ namespace VoiceVector.Shared
             return new KeyValuePair<string, string>(id, Path.Combine(dir, id + ".wav"));
         }
 
+        /// <summary>A recording whose pipeline never finished (quit, crash,
+        /// force-kill, updater) leaves a .wav with no .md: invisible in the
+        /// library and not retryable. Give each one a failed entry so it shows
+        /// up with Retry. Files younger than <paramref name="olderThanSeconds"/>
+        /// are skipped (a recording may be in flight). Returns how many were
+        /// reconciled.</summary>
+        public int ReconcileOrphanedAudio(double olderThanSeconds = 60)
+        {
+            int reconciled = 0;
+            foreach (var folder in FolderNames())
+            {
+                var dir = FolderPath(folder);
+                if (!Directory.Exists(dir)) continue;
+                foreach (var wav in Directory.EnumerateFiles(dir, "*.wav"))
+                {
+                    var id = Path.GetFileNameWithoutExtension(wav);
+                    if (File.Exists(Path.Combine(dir, id + ".md"))) continue;
+                    var info = new FileInfo(wav);
+                    if ((DateTime.Now - info.LastWriteTime).TotalSeconds < olderThanSeconds) continue;
+                    var entry = new Entry
+                    {
+                        Id = id,
+                        Folder = folder,
+                        Date = new DateTimeOffset(info.LastWriteTime),
+                        Duration = Math.Max(0, info.Length - 44) / 32000.0, // 16 kHz mono 16-bit
+                        Status = "error: interrupted before it was transcribed — retry",
+                    };
+                    try { Save(entry); reconciled++; }
+                    catch (Exception e) { Log.Error("Could not record orphaned audio " + id + ": " + e.Message); }
+                }
+            }
+            return reconciled;
+        }
+
         public void Save(Entry entry)
         {
             File.WriteAllText(Path.Combine(FolderPath(entry.Folder), entry.MarkdownFilename),
