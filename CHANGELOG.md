@@ -4,6 +4,85 @@ All notable changes to VoiceVector. Each release's entry doubles as its
 GitHub release notes. Versions follow [semantic versioning](https://semver.org);
 all three apps share one version number.
 
+## v0.6.5 — 2026-09-20
+
+A bug sweep of both apps after the v0.6.2–v0.6.4 hotfixes. Nothing here
+changes the storage format or config schema; existing files keep working.
+
+**Both platforms**
+
+- **Removing a provider no longer breaks hotkeys that pointed at it.** A
+  per-hotkey transcriber/cleanup/review/router override referencing a deleted
+  provider used to make that hotkey fail ("No transcription provider") while
+  Settings showed a valid default. Overrides now revert to Default on removal,
+  and a stale override falls back to the global default at dictation time.
+- **Interrupted recordings are no longer lost.** A `.wav` whose pipeline never
+  finished (quit, crash, force-kill, an update mid-transcription) had no `.md`
+  and was invisible. At launch each one now gets a failed entry with Retry.
+- **A discarded take can't leak into a later Retry.** Streamed segments from
+  an Esc-cancelled recording were kept and prepended to the next retried
+  transcript (and still uploaded). They're dropped on discard.
+- **Retry keeps the original date** instead of restamping the entry to now.
+- **Pre-release versions compare correctly** in the updater
+  (`0.6.4-beta.1` no longer parses as `0.6.1`).
+- **An unreadable config.json is preserved, not overwritten.** It's renamed to
+  `config.json.broken-<timestamp>` beside fresh defaults; Windows now writes the
+  file atomically so a crash mid-save can't truncate it.
+
+**macOS**
+
+- **Quit from the menu bar or ⌘Q works while Settings is open** (same AppKit
+  sheet deferral that broke the updater in v0.6.2).
+- **Pairing requests show while Settings is open** instead of queueing behind
+  it until the other machine times out.
+- **Safer in-app update:** the new bundle is copied in beside the old one and
+  swapped with rollback (a failed copy leaves the installed app intact); paths
+  with spaces or quotes are handled; updating a quarantined
+  (App-Translocated) copy is refused with an explanation.
+- **Hotkey capture** targets the row you clicked even if rows are deleted
+  meanwhile, only one row can be in "Press a key…" at a time, and Esc cancels.
+- Config decoding is tolerant for provider, hotkey and webhook entries and for
+  unknown enum values (a newer build's config no longer resets an older one).
+- A library write failure is announced instead of silently dropping the entry.
+- The "Transcription" role toggle is disabled for a provider with no STT model
+  (the Dictation tab couldn't display that selection).
+- The recording HUD no longer re-renders 20×/s while hidden.
+
+**Windows**
+
+- **A failure anywhere in the dictation pipeline no longer wedges the app in
+  "Processing"** with every hotkey ignored; the entry is saved as failed with
+  Retry and the error is shown.
+- **Microphone failures are loud:** if the device can't be opened (privacy
+  setting, unplugged, unsupported format) the hotkey reports "Could not start
+  recording" instead of silently recording nothing.
+- **Only one instance runs.** Autostart plus a Start Menu click no longer
+  yields two copies each with its own keyboard hook (double pastes, two tray
+  icons).
+- **Hotkey capture can't be left armed:** leaving Settings, rebuilding the page,
+  or pressing Esc disarms "Press a key…" (previously the next keystroke in any
+  app was swallowed and became the hotkey); arming one row disarms another.
+- **Finishing a dictation no longer rebuilds Settings under you** (lost focus,
+  lost caret, scroll reset); only the library view refreshes. The footer folder
+  picker now shows newly created folders.
+- **Cleanup prompt editor:** switching mode shows that mode's built-in prompt
+  (editing the stale one saved the wrong prompt as custom); the first edit
+  immediately labels it custom and offers Reset.
+- API-key save failures (DPAPI/disk) are shown next to the field.
+- Update script: matches the process by name as well as PID, retries the copy,
+  and relaunches the old exe if the copy never succeeds.
+- Start-with-Windows registry command is quoted; the tray icon is removed on
+  every exit path; the keyboard hook can't crash the process if a hotkey is
+  added or removed mid-keystroke; the HUD only advertises "Enter: paste / Esc:
+  discard" when those keys actually do that; text fields show the focus ring
+  again.
+- **Per-hotkey "Default (…)" pickers went stale.** After choosing a global
+  transcription provider, a hotkey's Transcriber picker could still read
+  "Default (none)" — on macOS because menu pickers keep an item's old title
+  when only its text changes, on Windows because the hotkey rows were built
+  once and not refreshed. Both now update immediately (same fix for the
+  per-hotkey Cleanup model picker on macOS).
+
 ## v0.6.4 — 2026-09-19
 
 Windows hotfix:
