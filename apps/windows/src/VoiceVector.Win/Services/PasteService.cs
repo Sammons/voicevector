@@ -75,7 +75,8 @@ namespace VoiceVector.Win.Services
         {
             for (int i = 0; i < 100; i++)
             {
-                bool held = ((Native.GetAsyncKeyState(0x12) & 0x8000) != 0)
+                bool held = ((Native.GetAsyncKeyState(0x11) & 0x8000) != 0)
+                            || ((Native.GetAsyncKeyState(0x12) & 0x8000) != 0)
                             || ((Native.GetAsyncKeyState(0x10) & 0x8000) != 0)
                             || ((Native.GetAsyncKeyState(0x5B) & 0x8000) != 0)
                             || ((Native.GetAsyncKeyState(0x5C) & 0x8000) != 0);
@@ -101,12 +102,18 @@ namespace VoiceVector.Win.Services
             return true;
         }
 
-        private static Native.INPUT Key(ushort vk, bool down)
+        /// <summary>One synthesized keystroke, stamped so our own hook ignores it.</summary>
+        internal static Native.INPUT Key(ushort vk, bool down)
         {
             return new Native.INPUT
             {
                 type = Native.INPUT_KEYBOARD,
-                ki = new Native.KEYBDINPUT { wVk = vk, dwFlags = down ? 0u : Native.KEYEVENTF_KEYUP },
+                ki = new Native.KEYBDINPUT
+                {
+                    wVk = vk,
+                    dwFlags = down ? 0u : Native.KEYEVENTF_KEYUP,
+                    dwExtraInfo = Native.InjectedMarker,
+                },
             };
         }
 

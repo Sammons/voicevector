@@ -8,7 +8,9 @@ namespace VoiceVector.Win.Services
     /// <summary>
     /// Global hotkey via a low-level keyboard hook (userland, no admin).
     /// Matched non-modifier hotkeys are swallowed; modifier-only ones pass
-    /// through. Requires a message loop on the installing thread (WPF UI).
+    /// through (so Right Alt still works in combos) with menu activation
+    /// masked — see <see cref="MaskMenuActivation"/>. Requires a message loop
+    /// on the installing thread (WPF UI).
     /// </summary>
     public sealed class KeyboardHook
     {
@@ -106,6 +108,11 @@ namespace VoiceVector.Win.Services
             if (!isDown && !isUp) return Native.CallNextHookEx(_hook, nCode, wParam, lParam);
             int vk = (int)info.vkCode;
 
+            // Our own synthesized input (paste Ctrl+V, Enter, the menu mask):
+            // never a hotkey, never captured.
+            if (info.dwExtraInfo == Native.InjectedMarker)
+                return Native.CallNextHookEx(_hook, nCode, wParam, lParam);
+
             var capture = CaptureHandler;
             if (capture != null)
             {
@@ -169,6 +176,8 @@ namespace VoiceVector.Win.Services
                     _hotkeyIsDown[profile.Id] = true;
                     if (!_machine.IsActive) _activeProfileId = profile.Id;
                     Emit(_machine.KeyDown(Now));
+                    if (hotkey.IsModifierOnly && Array.IndexOf(MenuModifierVks, vk) >= 0)
+                        MaskMenuActivation();
                 }
                 else
                 {
@@ -179,6 +188,24 @@ namespace VoiceVector.Win.Services
                     ? Native.CallNextHookEx(_hook, nCode, wParam, lParam) : (IntPtr)1;
             }
             return Native.CallNextHookEx(_hook, nCode, wParam, lParam);
+        }
+
+        private static readonly int[] MenuModifierVks = { 0xA4, 0xA5, 0x5B, 0x5C }; // Alt, Win
+
+        /// <summary>A modifier-only hotkey is passed through to the app, and a
+        /// lone Alt press+release is Windows' "activate the menu bar" gesture
+        /// (lone Win opens Start). Every dictation therefore left the target
+        /// app in menu mode, so the synthesized Ctrl+V went to the menu bar and
+        /// nothing was pasted. Injecting a dummy key while the modifier is down
+        /// makes Windows see a combo instead of a lone tap — the same mask
+        /// PowerToys and AutoHotkey use. Sent from inside the hook so it lands
+        /// right after the modifier's key-down, before any release.</summary>
+        private static void MaskMenuActivation()
+        {
+            var inputs = new Native.INPUT[2];
+            inputs[0] = PasteService.Key(Native.VK_DUMMY, true);
+            inputs[1] = PasteService.Key(Native.VK_DUMMY, false);
+            Native.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(Native.INPUT)));
         }
 
         private static int CurrentModifierMask()

@@ -47,6 +47,12 @@ namespace VoiceVector.Win.Services
         public const ushort VK_CONTROL = 0x11;
         public const ushort VK_V = 0x56;
         public const ushort VK_RETURN = 0x0D;
+        /// <summary>Unassigned virtual key: delivered like any key but bound
+        /// to nothing. Used to mask lone-Alt/Win menu activation.</summary>
+        public const ushort VK_DUMMY = 0xFF;
+        /// <summary>dwExtraInfo stamp on every keystroke we synthesize, so the
+        /// keyboard hook lets our own input straight through.</summary>
+        public static readonly UIntPtr InjectedMarker = (UIntPtr)0x56561A5Eu;
 
         [StructLayout(LayoutKind.Sequential)]
         public struct KEYBDINPUT
