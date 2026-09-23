@@ -4,6 +4,22 @@ All notable changes to VoiceVector. Each release's entry doubles as its
 GitHub release notes. Versions follow [semantic versioning](https://semver.org);
 all three apps share one version number.
 
+## v0.6.6 — 2026-09-23
+
+Windows hotfix:
+
+- **Pasting into apps never worked with a modifier-only hotkey.** The
+  default Right Alt hotkey is passed through to the app (so Alt combos keep
+  working), but a lone Alt press-and-release is Windows' "activate the menu
+  bar" gesture — every dictation left the target app in menu mode, and the
+  synthesized Ctrl+V went to the menu bar instead of the text field (a manual
+  Ctrl+V afterwards pasted fine). The hook now injects a harmless dummy key
+  while the modifier is down, the same mask PowerToys and AutoHotkey use, so
+  the app sees a combo rather than a lone tap; a Win-key hotkey likewise no
+  longer opens Start. The app's own synthesized keystrokes are stamped so the
+  hook never treats them as hotkeys or captures them, and the paste waits for
+  Ctrl to be released too.
+
 ## v0.6.5 — 2026-09-20
 
 A bug sweep of both apps after the v0.6.2–v0.6.4 hotfixes. Nothing here
