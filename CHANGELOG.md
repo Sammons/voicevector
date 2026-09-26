@@ -4,6 +4,19 @@ All notable changes to VoiceVector. Each release's entry doubles as its
 GitHub release notes. Versions follow [semantic versioning](https://semver.org);
 all three apps share one version number.
 
+## v0.6.7 — 2026-09-25
+
+Windows hotfix:
+
+- **Pasting still failed with the Right Alt hotkey.** v0.6.6 tried to
+  stop the lone Alt tap from opening the app's menu / access-key mode by
+  injecting a dummy key, but that mask didn't take, so the synthesized Ctrl+V
+  was still eaten. An Alt or Win hotkey is now held back from the app
+  entirely: a dictation tap never reaches it, so there's nothing to activate.
+  If another key is pressed while it is down (Alt+Tab, AltGr+e), the modifier
+  is replayed just ahead of that key so combos keep working, and that press
+  no longer starts a dictation.
+
 ## v0.6.6 — 2026-09-23
 
 Windows hotfix:
