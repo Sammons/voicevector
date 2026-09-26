@@ -30,6 +30,7 @@ namespace VoiceVector.SelfTest
         {
             TestJson();
             TestTapStateMachine();
+            TestModifierHoldFilter();
             TestMarkdown();
             TestLibraryFiles();
             TestConfig();
@@ -72,6 +73,34 @@ namespace VoiceVector.SelfTest
             bool threw = false;
             try { Json.Parse("{\"a\":}"); } catch (FormatException) { threw = true; }
             Expect(threw, "json: malformed input throws");
+        }
+
+        private static void TestModifierHoldFilter()
+        {
+            const int RAlt = 0xA5, Tab = 0x09, E = 0x45, RCtrl = 0xA3;
+            var V = ModifierHoldFilter.Verdict.Pass;
+            var S = ModifierHoldFilter.Verdict.Swallow;
+            var R = ModifierHoldFilter.Verdict.ReplayModifierThenKey;
+
+            var f = new ModifierHoldFilter();
+            Expect(f.OnHotkey(RAlt, true) == S, "hold: lone Alt down is held back");
+            Expect(f.OnHotkey(RAlt, true) == S, "hold: Alt auto-repeat stays held back");
+            Expect(f.OnHotkey(RAlt, false) == S, "hold: lone Alt tap never reaches the app");
+            Expect(f.HeldVk == 0, "hold: released");
+
+            f = new ModifierHoldFilter();
+            f.OnHotkey(RAlt, true);
+            Expect(f.OnOtherKey(Tab, true) == R, "hold: Alt+Tab replays Alt before Tab");
+            Expect(f.OnOtherKey(Tab, false) == V, "hold: Tab up passes");
+            Expect(f.OnOtherKey(Tab, true) == V, "hold: second Tab passes (Alt already replayed)");
+            Expect(f.OnHotkey(RAlt, true) == V, "hold: Alt auto-repeat passes after replay");
+            Expect(f.OnHotkey(RAlt, false) == V, "hold: Alt up passes after replay");
+
+            f = new ModifierHoldFilter();
+            Expect(f.OnOtherKey(E, true) == V, "hold: keys pass when nothing is held");
+            Expect(f.OnHotkey(RCtrl, true) == V && f.OnHotkey(RCtrl, false) == V,
+                   "hold: Ctrl hotkey passes through (lone Ctrl is harmless)");
+            Expect(f.OnHotkey(RAlt, false) == V, "hold: an up with no held down passes");
         }
 
         private static void TestTapStateMachine()

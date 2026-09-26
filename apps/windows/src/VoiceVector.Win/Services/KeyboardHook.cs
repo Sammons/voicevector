@@ -7,10 +7,10 @@ namespace VoiceVector.Win.Services
 {
     /// <summary>
     /// Global hotkey via a low-level keyboard hook (userland, no admin).
-    /// Matched non-modifier hotkeys are swallowed; modifier-only ones pass
-    /// through (so Right Alt still works in combos) with menu activation
-    /// masked — see <see cref="MaskMenuActivation"/>. Requires a message loop
-    /// on the installing thread (WPF UI).
+    /// Matched non-modifier hotkeys are swallowed. Modifier-only Alt/Win
+    /// hotkeys are held back and replayed only when used in a combo (see
+    /// <see cref="ModifierHoldFilter"/>); other modifier-only hotkeys pass
+    /// through. Requires a message loop on the installing thread (WPF UI).
     /// </summary>
     public sealed class KeyboardHook
     {
@@ -46,6 +46,9 @@ namespace VoiceVector.Win.Services
         private readonly System.Collections.Generic.Dictionary<Guid, bool> _hotkeyIsDown =
             new System.Collections.Generic.Dictionary<Guid, bool>();
         private Guid _activeProfileId;
+        private readonly ModifierHoldFilter _holdFilter = new ModifierHoldFilter();
+        private ushort _heldScan;
+        private bool _heldExtended;
 
         private static readonly int[] ModifierVks =
             { 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0x5B, 0x5C, 0x14 };
@@ -108,8 +111,8 @@ namespace VoiceVector.Win.Services
             if (!isDown && !isUp) return Native.CallNextHookEx(_hook, nCode, wParam, lParam);
             int vk = (int)info.vkCode;
 
-            // Our own synthesized input (paste Ctrl+V, Enter, the menu mask):
-            // never a hotkey, never captured.
+            // Our own synthesized input (paste Ctrl+V, Enter, a replayed
+            // modifier): never a hotkey, never captured.
             if (info.dwExtraInfo == Native.InjectedMarker)
                 return Native.CallNextHookEx(_hook, nCode, wParam, lParam);
 
@@ -153,6 +156,17 @@ namespace VoiceVector.Win.Services
                 return (IntPtr)1;
             }
 
+            // A held-back Alt/Win hotkey turned out to be a combo (Alt+Tab,
+            // AltGr+e…): replay the modifier ahead of this key so the app sees
+            // the combo, and don't treat the press as a dictation gesture.
+            if (vk != _holdFilter.HeldVk
+                && _holdFilter.OnOtherKey(vk, isDown) == ModifierHoldFilter.Verdict.ReplayModifierThenKey)
+            {
+                if (_machine.Phase == TapStateMachine.PhaseKind.Pressed) Emit(_machine.Cancel());
+                ReplayHeldModifierThen(vk, info);
+                return (IntPtr)1;
+            }
+
             // Try each profile's hotkey; an in-flight gesture only accepts
             // events from its initiating profile. First matching spec wins.
             // Snapshot: the UI thread adds/removes profiles on this same list.
@@ -171,41 +185,64 @@ namespace VoiceVector.Win.Services
                 if (isDown)
                 {
                     if (wasDown)
-                        return hotkey.IsModifierOnly
-                            ? Native.CallNextHookEx(_hook, nCode, wParam, lParam) : (IntPtr)1;
+                        return ModifierResult(hotkey, vk, true, info, nCode, wParam, lParam);
                     _hotkeyIsDown[profile.Id] = true;
                     if (!_machine.IsActive) _activeProfileId = profile.Id;
                     Emit(_machine.KeyDown(Now));
-                    if (hotkey.IsModifierOnly && Array.IndexOf(MenuModifierVks, vk) >= 0)
-                        MaskMenuActivation();
                 }
                 else
                 {
                     _hotkeyIsDown[profile.Id] = false;
                     Emit(_machine.KeyUp(Now));
                 }
-                return hotkey.IsModifierOnly
-                    ? Native.CallNextHookEx(_hook, nCode, wParam, lParam) : (IntPtr)1;
+                return ModifierResult(hotkey, vk, isDown, info, nCode, wParam, lParam);
             }
             return Native.CallNextHookEx(_hook, nCode, wParam, lParam);
         }
 
-        private static readonly int[] MenuModifierVks = { 0xA4, 0xA5, 0x5B, 0x5C }; // Alt, Win
+        /// <summary>What happens to a matched hotkey event: non-modifier
+        /// hotkeys are always swallowed; Alt/Win go through the hold filter;
+        /// other modifiers (Ctrl, Shift, CapsLock) pass through.</summary>
+        private IntPtr ModifierResult(HotkeySpec hotkey, int vk, bool down, Native.KBDLLHOOKSTRUCT info,
+                                      int nCode, IntPtr wParam, IntPtr lParam)
+        {
+            if (!hotkey.IsModifierOnly) return (IntPtr)1;
+            if (down && _holdFilter.HeldVk != vk)
+            {
+                _heldScan = (ushort)info.scanCode;
+                _heldExtended = (info.flags & Native.LLKHF_EXTENDED) != 0;
+            }
+            return _holdFilter.OnHotkey(vk, down) == ModifierHoldFilter.Verdict.Pass
+                ? Native.CallNextHookEx(_hook, nCode, wParam, lParam)
+                : (IntPtr)1;
+        }
 
-        /// <summary>A modifier-only hotkey is passed through to the app, and a
-        /// lone Alt press+release is Windows' "activate the menu bar" gesture
-        /// (lone Win opens Start). Every dictation therefore left the target
-        /// app in menu mode, so the synthesized Ctrl+V went to the menu bar and
-        /// nothing was pasted. Injecting a dummy key while the modifier is down
-        /// makes Windows see a combo instead of a lone tap — the same mask
-        /// PowerToys and AutoHotkey use. Sent from inside the hook so it lands
-        /// right after the modifier's key-down, before any release.</summary>
-        private static void MaskMenuActivation()
+        /// <summary>Inject the held modifier's key-down and then this key's
+        /// key-down, in that order (both stamped, so this hook passes them).
+        /// The real key-ups that follow pass through untouched.</summary>
+        private void ReplayHeldModifierThen(int vk, Native.KBDLLHOOKSTRUCT info)
         {
             var inputs = new Native.INPUT[2];
-            inputs[0] = PasteService.Key(Native.VK_DUMMY, true);
-            inputs[1] = PasteService.Key(Native.VK_DUMMY, false);
-            Native.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(Native.INPUT)));
+            inputs[0] = Stamped((ushort)_holdFilter.HeldVk, _heldScan, _heldExtended);
+            inputs[1] = Stamped((ushort)vk, (ushort)info.scanCode,
+                                (info.flags & Native.LLKHF_EXTENDED) != 0);
+            uint sent = Native.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(Native.INPUT)));
+            if (sent != inputs.Length) Log.Error("Modifier replay: SendInput sent " + sent + "/2");
+        }
+
+        private static Native.INPUT Stamped(ushort vk, ushort scan, bool extended)
+        {
+            return new Native.INPUT
+            {
+                type = Native.INPUT_KEYBOARD,
+                ki = new Native.KEYBDINPUT
+                {
+                    wVk = vk,
+                    wScan = scan,
+                    dwFlags = extended ? Native.KEYEVENTF_EXTENDEDKEY : 0u,
+                    dwExtraInfo = Native.InjectedMarker,
+                },
+            };
         }
 
         private static int CurrentModifierMask()
